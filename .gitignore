@@ -1,0 +1,13 @@
+node_modules/
+dist/
+backend/.venv/
+backend/data/
+backend/backend/
+**/.env
+__pycache__/
+*.py[cod]
+.DS_Store
+.idea/
+.vscode/
+*.local
+*.log

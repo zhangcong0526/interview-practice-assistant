@@ -109,17 +109,17 @@ export default function App() {
       .catch(() => setActiveResume(null))
   }, [])
 
-  const refreshQuizState = useCallback(() => {
-    listMistakes()
-      .then(setMistakes)
-      .catch(() => setMistakes([]))
-    getQuizProgress()
-      .then(setProgress)
-      .catch(() => setProgress(null))
+  const refreshQuizState = useCallback(async () => {
+    const [nextMistakes, nextProgress] = await Promise.all([
+      listMistakes().catch(() => [] as MistakeItem[]),
+      getQuizProgress().catch(() => null),
+    ])
+    setMistakes(nextMistakes)
+    setProgress(nextProgress)
   }, [])
 
   useEffect(() => {
-    refreshQuizState()
+    void refreshQuizState()
   }, [refreshQuizState])
 
   const handlePaperReady = useCallback((next: QuizPaper) => {
@@ -130,10 +130,10 @@ export default function App() {
   }, [])
 
   const handleGraded = useCallback(
-    (next: QuizAttempt) => {
+    async (next: QuizAttempt) => {
       setAttempt(next)
       setQuizPhase('result')
-      refreshQuizState()
+      await refreshQuizState()
       window.scrollTo({ top: 0, behavior: 'smooth' })
     },
     [refreshQuizState],

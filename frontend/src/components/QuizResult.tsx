@@ -200,27 +200,6 @@ export function QuizResult({
             </div>
 
             <div className="mt-3">
-              <p className="text-xs font-semibold text-zinc-700">已跨题型掌握</p>
-              {guide.mastered_topics.length > 0 ? (
-                <div className="mt-1.5 flex flex-wrap gap-1.5">
-                  {guide.mastered_topics.slice(0, 8).map((topic) => (
-                    <span
-                      key={topic.topic}
-                      className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs text-emerald-800"
-                      title={`已通过：${topic.verified_types.map((type) => TYPE_LABEL[type] ?? type).join('、')}`}
-                    >
-                      {topic.topic}
-                    </span>
-                  ))}
-                </div>
-              ) : (
-                <p className="mt-1 text-xs leading-5 text-zinc-500">
-                  还没有知识点满足“累计 4 题、正确率 85% 以上、至少两种题型答对”的标准。
-                </p>
-              )}
-            </div>
-
-            <div className="mt-3">
               <p className="text-xs font-semibold text-zinc-700">下一步重点</p>
               {guide.focus_topics.length > 0 ? (
                 <ul className="mt-1.5 space-y-2">
@@ -245,41 +224,6 @@ export function QuizResult({
                 <p className="mt-1 text-xs leading-5 text-zinc-500">当前知识点掌握稳定，可以做一套混合卷保持手感。</p>
               )}
             </div>
-
-            {guide.module_stats && guide.module_stats.length > 0 && (
-              <div className="mt-3">
-                <p className="text-xs font-semibold text-zinc-700">板块掌握度</p>
-                <div className="mt-1.5 grid gap-2 sm:grid-cols-2">
-                  {guide.module_stats.slice(0, 4).map((module) => (
-                    <div key={module.module} className="rounded-lg bg-white px-3 py-2 ring-1 ring-zinc-200">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="truncate text-xs font-semibold text-zinc-800">
-                          {module.module}
-                        </span>
-                        <span className="shrink-0 text-xs text-zinc-500">
-                          {module.mastered_topic_count}/{module.topic_count} 点
-                        </span>
-                      </div>
-                      <div className="mt-1.5 h-1.5 overflow-hidden rounded-lg bg-zinc-200">
-                        <div
-                          className={`h-full rounded-lg ${
-                            module.accuracy >= 0.85
-                              ? 'bg-emerald-600'
-                              : module.accuracy >= 0.6
-                                ? 'bg-amber-500'
-                                : 'bg-red-500'
-                          }`}
-                          style={{ width: `${Math.max(4, module.accuracy * 100)}%` }}
-                        />
-                      </div>
-                      <p className="mt-1 line-clamp-2 text-xs leading-5 text-zinc-500">
-                        {module.recommendation}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
 
             <div className="mt-3 rounded-lg bg-white px-3 py-2 ring-1 ring-zinc-200">
               <div className="flex flex-wrap items-center justify-between gap-2">

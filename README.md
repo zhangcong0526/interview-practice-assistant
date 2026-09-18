@@ -27,22 +27,43 @@
 
 ## 环境要求
 
+- Git
 - Node.js 20+
 - Python 3.11+
 - FFmpeg / FFprobe 已加入 PATH
-- DeepSeek API Key 用于分析
+- DeepSeek API Key 用于 LLM 分析、命题和面试点评
 - 语音转写默认本地运行，不需要额外 API Key
 
-## 后端
+Windows 用户可先安装依赖，再使用仓库根目录的一键启动脚本：
 
 ```powershell
-cd backend
-python -m venv .venv
-.venv\Scripts\pip install -r requirements.txt
-Copy-Item .env.example .env
+winget install OpenJS.NodeJS.LTS
+winget install Python.Python.3.11
+winget install Gyan.FFmpeg
 ```
 
-编辑 `backend/.env`：
+安装后请重新打开命令行窗口，让 PATH 生效。
+
+## 快速开始（Windows）
+
+1. 克隆仓库：
+
+   ```powershell
+   git clone https://github.com/zhangcong0526/interview-practice-assistant.git
+   cd interview-practice-assistant
+   ```
+
+2. 双击仓库根目录的 `start.bat`。
+
+首次启动会自动完成：
+
+- 创建 `backend/.venv` Python 虚拟环境；
+- 安装后端依赖和前端依赖；
+- 从 `backend/.env.example` 复制生成 `backend/.env`；
+- 启动后端 `http://127.0.0.1:8000`；
+- 启动前端并打开 `http://127.0.0.1:5173/`。
+
+首次生成 `backend/.env` 后，按脚本提示填写：
 
 ```ini
 LLM_PROVIDER=deepseek
@@ -54,24 +75,72 @@ MAX_UPLOAD_SIZE_MB=2048
 UPLOAD_CHUNK_MB=8
 ```
 
-`OPENAI_API_KEY` 只有把 `ASR_BACKEND` 改成 `openai` 时才需要，留空不影响本地转写。
+如果首次启动时跳过填写，页面仍可打开，但 AI 分析、在线命题、模拟面试点评会不可用。补存 `backend/.env` 后，双击 `stop.bat` 停止服务，再重新运行 `start.bat`。
 
-启动：
+使用期间任务栏中最小化的「面试助手-后端」和「面试助手-前端」窗口不要关闭。用完后双击根目录 `stop.bat`，脚本会停止 8000 和 5173 端口上的服务。
+
+### 创建桌面快捷方式
+
+建议右键仓库根目录的 `start.bat` 和 `stop.bat`，选择「发送到」→「桌面快捷方式」。不要直接把 `.bat` 复制到桌面，因为根目录脚本需要通过相对路径调用 `scripts/` 目录中的通用启动逻辑。
+
+### 依赖更新
+
+启动脚本会根据 `backend/requirements.txt` 和 `frontend/package-lock.json` 的哈希判断是否需要重新安装依赖。正常 `git pull` 后直接运行 `start.bat` 即可；手动排查时也可以执行：
+
+```powershell
+backend\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
+cd frontend
+npm ci
+```
+
+## 手动部署
+
+### Windows PowerShell
+
+启动后端：
 
 ```powershell
 cd backend
-.venv\Scripts\python.exe -m uvicorn app.main:app --port 8000
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+Copy-Item .env.example .env
+notepad .env
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-## 前端
+另开一个 PowerShell 窗口启动前端：
 
 ```powershell
 cd frontend
-npm install
+npm ci
 npm run dev
 ```
 
-访问 `http://localhost:5173`。开发服务器已将 `/api` 代理到 `http://127.0.0.1:8000`。
+### macOS / Linux
+
+启动后端：
+
+```bash
+cd backend
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+# 编辑 .env，填写 DEEPSEEK_API_KEY
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+另开一个终端启动前端：
+
+```bash
+cd frontend
+npm ci
+npm run dev
+```
+
+手动部署时同样访问 `http://127.0.0.1:5173/`。开发服务器已将 `/api` 代理到 `http://127.0.0.1:8000`。
+
+`OPENAI_API_KEY` 只有把 `ASR_BACKEND` 改成 `openai` 时才需要，留空不影响本地转写。
 
 ## 大文件说明
 
@@ -189,6 +258,54 @@ client_max_body_size 16m;
 
 - 硬性规则：改写示范只能重组简历已有内容，缺失的数字一律输出为【待补充：缺什么】，绝不编造。
 - 数据位置：`backend/data/resume/advice/`，重新导入简历后缓存自动失效。
+
+## 常见问题
+
+### 双击 `start.bat` 后提示找不到 Python
+
+安装 Python 3.11+，安装时勾选 Add python.exe to PATH，然后重新打开窗口再运行脚本。脚本也支持 Windows 的 `py -3` 启动器，但仍需要先安装 Python。
+
+### 提示找不到 Node.js 或 npm
+
+安装 Node.js 20+，安装后重新打开命令行窗口。可用以下命令确认：
+
+```powershell
+node --version
+npm --version
+```
+
+### 提示找不到 ffmpeg / ffprobe
+
+FFmpeg 用于音视频压缩、元数据读取和本地 Whisper 转写。Windows 可用 `winget install Gyan.FFmpeg` 安装，安装后重新打开终端，确认：
+
+```powershell
+ffmpeg -version
+ffprobe -version
+```
+
+缺少 FFmpeg 时页面仍能启动，但录音/视频相关能力会受限。
+
+### 页面能打开，但 AI 功能不可用
+
+检查 `backend/.env` 中的 `DEEPSEEK_API_KEY` 是否已填写。修改后运行根目录 `stop.bat`，再运行 `start.bat`。本地 Whisper 转写不依赖这个 Key，但 LLM 分析、命题、点评需要它。
+
+### 5173 或 8000 端口被占用
+
+`start.bat` 会清理这两个固定端口上的旧进程。如果其他重要软件正在使用这些端口，请先关闭它，或先运行 `stop.bat`。前端固定入口是 `http://127.0.0.1:5173/`，后端固定为 `http://127.0.0.1:8000`。
+
+### 第一次转写等了很久
+
+首次使用本地 Whisper 会下载模型到当前用户的 Hugging Face 缓存目录。网络较慢时只需等待首次下载完成，后续会复用本地缓存。
+
+### 更新代码后依赖报错
+
+启动脚本会依据依赖锁文件自动安装更新。仍失败时，在仓库根目录手动执行：
+
+```powershell
+backend\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
+cd frontend
+npm ci
+```
 
 ## 整体架构
 

@@ -5,6 +5,7 @@ import type {
   JobState,
   KnowledgeChunk,
   KnowledgeDocument,
+  MistakePaperRequest,
   InterviewRoleOption,
   InterviewTurnRequest,
   InterviewTurnResponse,
@@ -387,13 +388,17 @@ export async function generateQuizPaper(
 }
 
 export async function generateMistakePaper(
-  limit = 8,
-  difficulty = 'mixed',
+  request: MistakePaperRequest,
 ): Promise<QuizPaper> {
   return apiFetch<QuizPaper>('/quiz/papers/from-mistakes', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ limit, difficulty }),
+    body: JSON.stringify({
+      limit: request.limit ?? 8,
+      difficulty: request.difficulty ?? 'mixed',
+      scope: request.scope,
+      attempt_id: request.attempt_id ?? '',
+    }),
   })
 }
 
@@ -431,10 +436,28 @@ export async function getExpressionQuestion(roleKey: string): Promise<Expression
   })
 }
 
+export async function transcribeExpressionClip(blob: Blob): Promise<{
+  text: string
+  duration: number
+  language: string
+}> {
+  const form = new FormData()
+  form.append('file', blob, 'answer.webm')
+  const response = await fetch(`${API_BASE}/expression/transcribe`, {
+    method: 'POST',
+    body: form,
+  })
+  if (!response.ok) {
+    throw new Error(await readErrorMessage(response))
+  }
+  return response.json()
+}
+
 export async function analyzeExpression(payload: {
   role_key: string
   question: string
   question_label: string
+  practice_mode: 'read' | 'keywords' | 'blind'
   transcript: string
   duration_sec: number
 }): Promise<ExpressionSession> {

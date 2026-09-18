@@ -95,9 +95,9 @@ class TopicExtractRequest(BaseModel):
 class QuizGenerateRequest(BaseModel):
     keywords: list[str] = Field(default_factory=list)
     doc_ids: list[str] = Field(default_factory=list)
-    single: int = Field(default=12, ge=0, le=30)
-    multiple: int = Field(default=8, ge=0, le=30)
-    judge: int = Field(default=5, ge=0, le=30)
+    single: int = Field(default=10, ge=0, le=30)
+    multiple: int = Field(default=6, ge=0, le=30)
+    judge: int = Field(default=4, ge=0, le=30)
     difficulty: str = "mixed"
     focus_weak: bool = True
 
@@ -105,6 +105,8 @@ class QuizGenerateRequest(BaseModel):
 class MistakeQuizRequest(BaseModel):
     limit: int = Field(default=8, ge=1, le=20)
     difficulty: str = "mixed"
+    scope: str = Field(default="current", pattern="^(current|all)$")
+    attempt_id: str = ""
 
 
 class ExpressionQuestionRequest(BaseModel):
@@ -115,6 +117,7 @@ class ExpressionAnalyzeRequest(BaseModel):
     role_key: str = "robot_hardware"
     question: str = Field(min_length=1, max_length=500)
     question_label: str = ""
+    practice_mode: str = Field(default="blind", pattern="^(read|keywords|blind)$")
     transcript: str = Field(min_length=1, max_length=20000)
     duration_sec: float = Field(default=0, ge=0, le=1800)
 

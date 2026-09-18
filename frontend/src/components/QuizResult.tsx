@@ -5,15 +5,22 @@ import {
   CheckCircle2,
   Loader2,
   RotateCcw,
+  Sparkles,
   Target,
   XCircle,
 } from 'lucide-react'
 import { useState } from 'react'
-import { generateMistakePaper } from '../api'
-import type { MasteryLevel, QuizAttempt, QuizPaper } from '../types'
+import { generateMistakePaper, generateQuizPaper } from '../api'
+import type {
+  MasteryLevel,
+  MistakeQuizScope,
+  QuizAttempt,
+  QuizPaper,
+} from '../types'
 
 interface QuizResultProps {
   attempt: QuizAttempt
+  cumulativeMistakeCount: number
   onRetryMistakes: (paper: QuizPaper) => void
   onBackToSetup: () => void
 }
@@ -33,23 +40,62 @@ const TYPE_LABEL: Record<string, string> = {
 
 export function QuizResult({
   attempt,
+  cumulativeMistakeCount,
   onRetryMistakes,
   onBackToSetup,
 }: QuizResultProps) {
   const [busy, setBusy] = useState(false)
+  const [nextBusy, setNextBusy] = useState(false)
   const [error, setError] = useState('')
+  const [mistakeScope, setMistakeScope] = useState<MistakeQuizScope>('current')
   const { review } = attempt
+  const guide = review.learning_guide
   const wrongQuestions = attempt.questions.filter((item) => !item.is_correct)
+  const currentMistakeCount = wrongQuestions.length
+  const retryDisabled =
+    busy ||
+    (mistakeScope === 'current'
+      ? currentMistakeCount === 0
+      : cumulativeMistakeCount === 0)
 
   const handleRetry = async () => {
-    if (busy) return
+    if (retryDisabled) return
     setBusy(true)
     setError('')
     try {
-      onRetryMistakes(await generateMistakePaper(8, 'mixed'))
+      onRetryMistakes(
+        await generateMistakePaper({
+          scope: mistakeScope,
+          attempt_id: mistakeScope === 'current' ? attempt.attempt_id : '',
+          limit: 8,
+          difficulty: 'mixed',
+        }),
+      )
     } catch (retryError) {
       setError(retryError instanceof Error ? retryError.message : '错题重练组卷失败。')
       setBusy(false)
+    }
+  }
+
+  const handleSuggestedPaper = async () => {
+    if (!guide || nextBusy) return
+    setNextBusy(true)
+    setError('')
+    try {
+      onRetryMistakes(
+        await generateQuizPaper({
+          keywords: guide.next_paper.keywords,
+          doc_ids: [],
+          single: guide.next_paper.single,
+          multiple: guide.next_paper.multiple,
+          judge: guide.next_paper.judge,
+          difficulty: 'mixed',
+          focus_weak: true,
+        }),
+      )
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : '建议组卷失败。')
+      setNextBusy(false)
     }
   }
 
@@ -113,6 +159,170 @@ export function QuizResult({
           </div>
         </div>
 
+        {guide && (
+          <section className="mt-4 rounded-lg border border-zinc-200 bg-zinc-50 p-3.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-sm font-semibold text-zinc-900">学习指引</h3>
+              <span
+                className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+                  guide.interview_ready
+                    ? 'bg-emerald-100 text-emerald-800'
+                    : 'bg-amber-100 text-amber-800'
+                }`}
+              >
+                {guide.interview_ready ? '建议进入模拟面试' : '建议继续刷题巩固'}
+              </span>
+            </div>
+            <p className="mt-2 text-sm leading-6 text-zinc-700">{guide.summary}</p>
+
+            <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
+              {guide.type_stats.map((stat) => (
+                <div key={stat.type} className="rounded-lg bg-white px-3 py-2 ring-1 ring-zinc-200">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-medium text-zinc-600">{stat.label}</span>
+                    <span
+                      className={`text-xs font-semibold ${
+                        stat.accuracy >= 0.85
+                          ? 'text-emerald-700'
+                          : stat.accuracy >= 0.6
+                            ? 'text-amber-700'
+                            : 'text-red-700'
+                      }`}
+                    >
+                      {stat.total > 0 ? `${Math.round(stat.accuracy * 100)}%` : '未练习'}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs text-zinc-500">
+                    答对 {stat.correct}/{stat.total}
+                  </p>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-3">
+              <p className="text-xs font-semibold text-zinc-700">已跨题型掌握</p>
+              {guide.mastered_topics.length > 0 ? (
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  {guide.mastered_topics.slice(0, 8).map((topic) => (
+                    <span
+                      key={topic.topic}
+                      className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs text-emerald-800"
+                      title={`已通过：${topic.verified_types.map((type) => TYPE_LABEL[type] ?? type).join('、')}`}
+                    >
+                      {topic.topic}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-1 text-xs leading-5 text-zinc-500">
+                  还没有知识点满足“累计 4 题、正确率 85% 以上、至少两种题型答对”的标准。
+                </p>
+              )}
+            </div>
+
+            <div className="mt-3">
+              <p className="text-xs font-semibold text-zinc-700">下一步重点</p>
+              {guide.focus_topics.length > 0 ? (
+                <ul className="mt-1.5 space-y-2">
+                  {guide.focus_topics.slice(0, 5).map((topic) => (
+                    <li key={topic.topic} className="rounded-lg bg-white px-3 py-2 ring-1 ring-zinc-200">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-xs font-semibold text-zinc-800">{topic.topic}</span>
+                        <span className="text-xs text-zinc-500">
+                          {topic.correct}/{topic.total} · 正确率 {Math.round(topic.accuracy * 100)}%
+                        </span>
+                      </div>
+                      <p className="mt-1 text-xs leading-5 text-zinc-600">
+                        {topic.reasons.join('；')}
+                      </p>
+                      <p className="mt-1 text-xs leading-5 text-emerald-800">
+                        {topic.recommended_action}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-1 text-xs leading-5 text-zinc-500">当前知识点掌握稳定，可以做一套混合卷保持手感。</p>
+              )}
+            </div>
+
+            {guide.module_stats && guide.module_stats.length > 0 && (
+              <div className="mt-3">
+                <p className="text-xs font-semibold text-zinc-700">板块掌握度</p>
+                <div className="mt-1.5 grid gap-2 sm:grid-cols-2">
+                  {guide.module_stats.slice(0, 4).map((module) => (
+                    <div key={module.module} className="rounded-lg bg-white px-3 py-2 ring-1 ring-zinc-200">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="truncate text-xs font-semibold text-zinc-800">
+                          {module.module}
+                        </span>
+                        <span className="shrink-0 text-xs text-zinc-500">
+                          {module.mastered_topic_count}/{module.topic_count} 点
+                        </span>
+                      </div>
+                      <div className="mt-1.5 h-1.5 overflow-hidden rounded-lg bg-zinc-200">
+                        <div
+                          className={`h-full rounded-lg ${
+                            module.accuracy >= 0.85
+                              ? 'bg-emerald-600'
+                              : module.accuracy >= 0.6
+                                ? 'bg-amber-500'
+                                : 'bg-red-500'
+                          }`}
+                          style={{ width: `${Math.max(4, module.accuracy * 100)}%` }}
+                        />
+                      </div>
+                      <p className="mt-1 line-clamp-2 text-xs leading-5 text-zinc-500">
+                        {module.recommendation}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="mt-3 rounded-lg bg-white px-3 py-2 ring-1 ring-zinc-200">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-semibold text-zinc-700">下一套建议</p>
+                {guide.next_paper.keywords.length > 0 && (
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-60"
+                    onClick={handleSuggestedPaper}
+                    disabled={nextBusy}
+                  >
+                    {nextBusy ? (
+                      <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+                    ) : (
+                      <Sparkles className="size-3.5" aria-hidden="true" />
+                    )}
+                    一键生成
+                  </button>
+                )}
+              </div>
+              <p className="mt-1 text-xs leading-5 text-zinc-600">{guide.next_paper.reason}</p>
+              <p className="mt-1 text-xs text-zinc-500">
+                建议题量：单选 {guide.next_paper.single} · 多选 {guide.next_paper.multiple} · 判断 {guide.next_paper.judge}
+              </p>
+              {guide.next_paper.keywords.length > 0 && (
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  {guide.next_paper.keywords.map((keyword) => (
+                    <span key={keyword} className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-700">
+                      {keyword}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {!guide.interview_ready && guide.interview_reasons.length > 0 && (
+              <p className="mt-2 text-xs leading-5 text-amber-800">
+                模拟面试暂不建议跳转：{guide.interview_reasons.join('；')}。{guide.scope_note}
+              </p>
+            )}
+          </section>
+        )}
+
         {review.review_error && (
           <p className="mt-3 flex items-start gap-2 text-xs leading-5 text-amber-700">
             <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
@@ -120,17 +330,43 @@ export function QuizResult({
           </p>
         )}
 
-        <div className="mt-4 flex flex-wrap gap-3 border-t border-zinc-100 pt-4">
-          {wrongQuestions.length > 0 && (
-            <button type="button" className="primary-btn" onClick={handleRetry} disabled={busy}>
-              {busy ? (
-                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-              ) : (
-                <RotateCcw className="size-4" aria-hidden="true" />
-              )}
-              针对错题再考一次
+        <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-zinc-100 pt-4">
+          <div className="inline-flex rounded-lg border border-zinc-300 bg-zinc-100 p-0.5">
+            <button
+              type="button"
+              className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition disabled:opacity-50 ${
+                mistakeScope === 'current'
+                  ? 'bg-white text-zinc-900 shadow-sm'
+                  : 'text-zinc-500 hover:text-zinc-700'
+              }`}
+              onClick={() => setMistakeScope('current')}
+              disabled={currentMistakeCount === 0}
+              aria-pressed={mistakeScope === 'current'}
+            >
+              本次错题（{currentMistakeCount}）
             </button>
-          )}
+            <button
+              type="button"
+              className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition disabled:opacity-50 ${
+                mistakeScope === 'all'
+                  ? 'bg-white text-zinc-900 shadow-sm'
+                  : 'text-zinc-500 hover:text-zinc-700'
+              }`}
+              onClick={() => setMistakeScope('all')}
+              disabled={cumulativeMistakeCount === 0}
+              aria-pressed={mistakeScope === 'all'}
+            >
+              累计错题（{cumulativeMistakeCount}）
+            </button>
+          </div>
+          <button type="button" className="primary-btn" onClick={handleRetry} disabled={retryDisabled}>
+            {busy ? (
+              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+            ) : (
+              <RotateCcw className="size-4" aria-hidden="true" />
+            )}
+            {mistakeScope === 'current' ? '本次错题变形练' : '累计错题重练'}
+          </button>
           <button type="button" className="secondary-btn" onClick={onBackToSetup}>
             <BookMarked className="size-4" aria-hidden="true" />
             换知识点组卷

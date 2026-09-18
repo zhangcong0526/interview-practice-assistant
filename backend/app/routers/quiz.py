@@ -46,7 +46,11 @@ async def generate_paper(req: QuizGenerateRequest):
 async def generate_mistake_paper(req: MistakeQuizRequest):
     try:
         paper = await asyncio.to_thread(
-            quiz_service.generate_mistake_paper, req.limit, req.difficulty
+            quiz_service.generate_mistake_paper,
+            req.limit,
+            req.difficulty,
+            req.scope,
+            req.attempt_id,
         )
     except quiz_service.QuizError as exc:
         raise HTTPException(422, str(exc))

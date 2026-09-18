@@ -6,6 +6,7 @@ import {
   RefreshCw,
   RotateCcw,
   Search,
+  Sparkles,
   Tags,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -14,11 +15,18 @@ import {
   generateMistakePaper,
   generateQuizPaper,
 } from '../api'
-import type { KnowledgeDocument, QuizPaper, QuizTopic } from '../types'
+import type {
+  KnowledgeDocument,
+  MistakeQuizScope,
+  QuizPaper,
+  QuizProgress,
+  QuizTopic,
+} from '../types'
 
 interface QuizSetupProps {
   documents: KnowledgeDocument[]
   mistakeCount: number
+  progress: QuizProgress | null
   onPaperReady: (paper: QuizPaper) => void
 }
 
@@ -35,20 +43,26 @@ const MAX_TOTAL_QUESTIONS = 30
 export function QuizSetup({
   documents,
   mistakeCount,
+  progress,
   onPaperReady,
 }: QuizSetupProps) {
   const [topics, setTopics] = useState<QuizTopic[]>([])
   const [selected, setSelected] = useState<string[]>([])
   const [filter, setFilter] = useState('')
   const [docIds, setDocIds] = useState<string[]>([])
-  const [single, setSingle] = useState(12)
-  const [multiple, setMultiple] = useState(8)
-  const [judge, setJudge] = useState(5)
+  const [single, setSingle] = useState(10)
+  const [multiple, setMultiple] = useState(6)
+  const [judge, setJudge] = useState(4)
   const [difficulty, setDifficulty] = useState('mixed')
   const [loadingTopics, setLoadingTopics] = useState(false)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
+  const [mistakeScope, setMistakeScope] = useState<MistakeQuizScope>('current')
   const topicsRequestRef = useRef(0)
+  const latestAttempt = progress?.recent_attempts?.[0] ?? null
+  const currentMistakeCount = latestAttempt
+    ? Math.max(0, latestAttempt.total - latestAttempt.correct_count)
+    : 0
 
   const loadTopics = async (refresh = false) => {
     if (documents.length === 0) return
@@ -157,13 +171,45 @@ export function QuizSetup({
   }
 
   const handleMistakeQuiz = async () => {
-    if (busy || mistakeCount === 0) return
+    const availableCount = mistakeScope === 'current' ? currentMistakeCount : mistakeCount
+    if (busy || availableCount === 0) return
     setBusy('mistake')
     setError('')
     try {
-      onPaperReady(await generateMistakePaper(8, difficulty))
+      onPaperReady(
+        await generateMistakePaper({
+          scope: mistakeScope,
+          attempt_id: mistakeScope === 'current' ? latestAttempt?.attempt_id ?? '' : '',
+          limit: 8,
+          difficulty,
+        }),
+      )
     } catch (generateError) {
       setError(generateError instanceof Error ? generateError.message : '错题重练组卷失败。')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const handleSuggestedQuiz = async () => {
+    const suggestion = progress?.next_paper
+    if (!suggestion || suggestion.keywords.length === 0 || busy) return
+    setBusy('suggested')
+    setError('')
+    try {
+      onPaperReady(
+        await generateQuizPaper({
+          keywords: suggestion.keywords,
+          doc_ids: [],
+          single: suggestion.single,
+          multiple: suggestion.multiple,
+          judge: suggestion.judge,
+          difficulty: 'mixed',
+          focus_weak: true,
+        }),
+      )
+    } catch (generateError) {
+      setError(generateError instanceof Error ? generateError.message : '建议组卷失败。')
     } finally {
       setBusy('')
     }
@@ -194,20 +240,60 @@ export function QuizSetup({
           选择知识点组卷
         </h2>
         <div className="flex flex-wrap items-center gap-2">
-          {mistakeCount > 0 && (
-            <button
-              type="button"
-              className="secondary-btn px-3 py-2 text-xs"
-              onClick={handleMistakeQuiz}
-              disabled={Boolean(busy)}
-            >
-              {busy === 'mistake' ? (
-                <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
-              ) : (
-                <RotateCcw className="size-3.5" aria-hidden="true" />
-              )}
-              错题重练（{mistakeCount}）
-            </button>
+          {(currentMistakeCount > 0 || mistakeCount > 0) && (
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="inline-flex rounded-lg border border-zinc-300 bg-zinc-100 p-0.5">
+                <button
+                  type="button"
+                  className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition disabled:opacity-50 ${
+                    mistakeScope === 'current'
+                      ? 'bg-white text-zinc-900 shadow-sm'
+                      : 'text-zinc-500 hover:text-zinc-700'
+                  }`}
+                  onClick={() => setMistakeScope('current')}
+                  disabled={currentMistakeCount === 0}
+                  aria-pressed={mistakeScope === 'current'}
+                >
+                  本次错题（{currentMistakeCount}）
+                </button>
+                <button
+                  type="button"
+                  className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition disabled:opacity-50 ${
+                    mistakeScope === 'all'
+                      ? 'bg-white text-zinc-900 shadow-sm'
+                      : 'text-zinc-500 hover:text-zinc-700'
+                  }`}
+                  onClick={() => setMistakeScope('all')}
+                  disabled={mistakeCount === 0}
+                  aria-pressed={mistakeScope === 'all'}
+                >
+                  累计错题（{mistakeCount}）
+                </button>
+              </div>
+              <button
+                type="button"
+                className="secondary-btn px-3 py-2 text-xs"
+                onClick={handleMistakeQuiz}
+                disabled={
+                  Boolean(busy) ||
+                  (mistakeScope === 'current'
+                    ? currentMistakeCount === 0
+                    : mistakeCount === 0)
+                }
+                title={mistakeScope === 'current' ? '按本卷错题知识点生成变形题' : '按错题本未巩固知识点组卷'}
+              >
+                {busy === 'mistake' ? (
+                  <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+                ) : (
+                  <RotateCcw className="size-3.5" aria-hidden="true" />
+                )}
+                {busy === 'mistake'
+                  ? '正在生成变形题'
+                  : mistakeScope === 'current'
+                    ? '本次错题变形练'
+                    : '累计错题重练'}
+              </button>
+            </div>
           )}
           <button
             type="button"
@@ -225,6 +311,48 @@ export function QuizSetup({
           </button>
         </div>
       </div>
+
+      {progress?.next_paper && progress.next_paper.keywords.length > 0 && (
+        <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3.5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="flex items-center gap-1.5 text-sm font-semibold text-emerald-900">
+                <Sparkles className="size-4" aria-hidden="true" />
+                按当前薄弱点建议组卷
+              </p>
+              <p className="mt-1 text-xs leading-5 text-emerald-800">
+                {progress.next_paper.reason}
+              </p>
+              <p className="mt-1 text-xs text-emerald-700">
+                单选 {progress.next_paper.single} · 多选 {progress.next_paper.multiple} · 判断{' '}
+                {progress.next_paper.judge}
+              </p>
+            </div>
+            <button
+              type="button"
+              className="shrink-0 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-60"
+              onClick={handleSuggestedQuiz}
+              disabled={Boolean(busy)}
+            >
+              {busy === 'suggested' ? (
+                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+              ) : (
+                '一键生成'
+              )}
+            </button>
+          </div>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {progress.next_paper.keywords.map((keyword) => (
+              <span
+                key={keyword}
+                className="rounded-full bg-white px-2 py-0.5 text-xs text-emerald-800 ring-1 ring-emerald-200"
+              >
+                {keyword}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       {documents.length > 1 && (
         <div className="mt-4">
@@ -373,7 +501,7 @@ export function QuizSetup({
       </div>
 
       <p className={`mt-2 text-xs ${overLimit ? 'font-medium text-red-600' : 'text-zinc-500'}`}>
-        共 {total} 道，一次最多 {MAX_TOTAL_QUESTIONS} 道（默认 25 道：单选 12 · 多选 8 · 判断 5）
+        共 {total} 道，一次最多 {MAX_TOTAL_QUESTIONS} 道（默认 20 道：单选 10 · 多选 6 · 判断 4）
         {overLimit ? '，请调低题数' : ''}
       </p>
 

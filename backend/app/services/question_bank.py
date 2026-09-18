@@ -13,13 +13,70 @@ import re
 from . import knowledge as knowledge_service
 
 # 两种编号写法：Q12：xxx / A1. xxx
-QUESTION_RES = (
-    re.compile(r"^#{0,6}\s*(Q\d+)\s*[：:．.、]\s*(.+?)\s*$"),
-    re.compile(r"^#{0,6}\s*([A-Z]\d+)\s*[．.、：:]\s*(.+?)\s*$"),
+QUESTION_HEADER_RE = re.compile(
+    r"^#{0,6}\s*(Q\d+|[A-Z]\d+)\s*[：:．.、]\s*(.+?)\s*$",
+    re.M,
 )
-SECTION_RE = re.compile(r"^#{1,3}\s+(\S.*?)\s*$")
+SECTION_RE = re.compile(r"^#{1,3}\s+(\S.*?)\s*$", re.M)
 INTENT_RE = re.compile(r"【面试官真实意图】\s*(.*)")
 INTENT_LOOKAHEAD = 8
+# AI 应用开发学习笔记使用连续的「问：... 答：...」，不是 Q1/A1 编号格式。
+INLINE_QA_RE = re.compile(
+    r"(?:^|\n)\s*(?:下一题)?问[：:]\s*(.*?)\s*答[：:]\s*(.*?)"
+    r"(?=\n\s*(?:下一题)?问[：:]|\n#{1,6}\s+|$)",
+    re.S | re.M,
+)
+
+ANSWER_MARKERS = (
+    "【参考答案（可直接说出口）】",
+    "【参考答案】",
+    "[参考答案]",
+    "参考答案：",
+    "参考答案:",
+)
+WEAK_MARKERS = ("【你的薄弱点提醒】", "【薄弱点提醒】", "[薄弱点提醒]")
+STOP_MARKERS = (
+    "【薄弱点提醒】",
+    "【快速补知识点攻略】",
+    "【面试官真实意图】",
+    "【你的薄弱表现】",
+    "【你的回答】",
+    "【拓展追问】",
+)
+
+DOMAIN_TERMS = (
+    "CAN", "485", "TCP", "UDP", "MQTT", "QoS", "keepalive", "LWT",
+    "遗嘱消息", "自动重连", "心跳", "ROS", "SLAM", "BMS", "OTA",
+    "EVT", "DVT", "PVT", "终端电阻", "报文ID", "仲裁", "波特率", "传感器",
+    "电机", "电池", "工控机", "激光雷达", "摄像头", "导航", "回充", "固件",
+    "整机", "老化", "示波器", "万用表", "物联网", "急停", "安全机制",
+    "硬件直连", "驱动器", "接触器", "制动距离", "手动复位", "防回滚",
+    "烧录", "J-Link", "ST-Link", "SWD",
+    "需求评审", "测试计划", "测试方案", "测试用例", "测试点", "等价类",
+    "边界值", "判定表", "因果图", "场景法", "异常场景", "正向流程",
+    "接口测试", "功能测试", "性能测试", "压力测试", "负载测试",
+    "稳定性测试", "并发", "容量", "响应时间", "吞吐量", "资源利用率",
+    "自动化测试", "UI自动化", "接口自动化", "回归测试", "冒烟测试",
+    "验收测试", "缺陷", "日志", "监控", "抓包", "Fiddler", "Charles",
+    "Postman", "JMeter", "LoadRunner", "Selenium", "Appium", "小程序",
+    "Wireshark", "WebSocket", "Master-Slave", "/etc/hosts",
+    "ROS_MASTER_URI", "rostopic", "rosbag", "RVIZ", "Foxglove",
+    "APP", "Web", "兼容性测试", "弱网测试", "中断测试", "权限测试",
+    "数据库", "MySQL", "Redis", "Linux", "SQL", "Python", "Java",
+    "Docker", "Kubernetes", "Git", "GitLab", "CI/CD", "Jenkins",
+    "大模型", "LLM", "智能体", "Agent", "RAG", "向量数据库", "Milvus",
+    "Embedding", "召回", "重排序", "rerank", "Prompt", "提示词", "MCP", "工具调用",
+    "Function Calling", "Skill", "幻觉", "上下文", "上下文工程", "知识库", "模型评测",
+    "数据集", "准确率", "badcase", "模型路由", "Trace", "限流", "熔断", "K8s",
+    "数据脱敏", "Prompt注入", "FAT", "SAT", "提测准入", "环境变更",
+    "环境配置", "版本管理",
+)
+
+GENERIC_TERMS = (
+    "测试报告", "评审", "评审机制", "checklist", "模板", "流程", "风险",
+    "覆盖率", "事实", "书面记录", "配置", "稳定性", "硬件", "长期深耕", "离职原因",
+    "缺点", "失败项目", "上级", "加班",
+)
 
 # 机器人 / 硬件专属词。软件岗与 AI 岗即使章节分流有偏差，命中这些词也要丢弃，
 # 这是用户明确划定的禁区，兜底一层更稳。
@@ -63,6 +120,7 @@ class RoleRule:
         borrow_hints: tuple[str, ...] = (),
         borrow_labels: tuple[str, ...] = (),
         borrow_note: str = "",
+        parse_inline_qa: bool = False,
     ) -> None:
         self.source_hints = source_hints
         self.section_hints = section_hints
@@ -70,6 +128,7 @@ class RoleRule:
         self.borrow_hints = borrow_hints
         self.borrow_labels = frozenset(borrow_labels)
         self.borrow_note = borrow_note
+        self.parse_inline_qa = parse_inline_qa
 
     def accepts_source(self, title: str) -> bool:
         return any(hint in title for hint in self.source_hints)
@@ -152,6 +211,12 @@ ROLE_RULES: dict[str, RoleRule] = {
         borrow_labels=AI_BORROWED_LABELS,
         borrow_note="（可结合他简历里的本地大模型部署与 AI 提效经历提问）",
     ),
+    # AI 应用开发资料是连续问答笔记，按行内「问/答」结构解析；旧题库仍走编号解析。
+    "ai_app_dev": RoleRule(
+        source_hints=("AI应用开发", "大模型应用开发", "Agent开发"),
+        block_terms=ROBOT_TERMS,
+        parse_inline_qa=True,
+    ),
 }
 
 
@@ -161,47 +226,209 @@ def _clean(text: str) -> str:
     return text.strip()
 
 
-def _match_question(line: str) -> tuple[str, str] | None:
-    for pattern in QUESTION_RES:
-        match = pattern.match(line)
-        if match:
-            return match.group(1), match.group(2)
-    return None
+def _merge_overlapping_chunks(chunks: list[str]) -> str:
+    """把带 120 字重叠的知识切块尽量还原成原文，避免答案跨块重复或缺半句。"""
+    merged = ""
+    for chunk in chunks:
+        chunk = (chunk or "").strip()
+        if not chunk:
+            continue
+        if not merged:
+            merged = chunk
+            continue
 
-
-def extract_questions(text: str) -> list[dict]:
-    """按编号抽题，附带所属章节与面试官意图。"""
-    lines = [line.strip() for line in text.split("\n")]
-    found: dict[str, dict] = {}
-    section = ""
-    for index, line in enumerate(lines):
-        heading = SECTION_RE.match(line)
-        if heading and not _match_question(line):
-            section = heading.group(1)
-            continue
-        matched = _match_question(line)
-        if not matched:
-            continue
-        label, body = matched
-        if label in found:
-            # 分块有重叠，同一题可能出现多次，保留首次命中。
-            continue
-        intent = ""
-        for offset in range(index + 1, min(index + INTENT_LOOKAHEAD, len(lines))):
-            hit = INTENT_RE.search(lines[offset])
-            if hit:
-                intent = hit.group(1).strip()
+        overlap = 0
+        upper = min(180, len(merged), len(chunk))
+        for size in range(upper, 40, -1):
+            if merged.endswith(chunk[:size]):
+                overlap = size
                 break
+        merged += chunk[overlap:] if overlap else f"\n{chunk}"
+    return merged
+
+
+def _marker_content(block: str, markers: tuple[str, ...], stop_markers: tuple[str, ...]) -> str:
+    starts = [(pos, marker) for marker in markers if (pos := block.find(marker)) >= 0]
+    if not starts:
+        return ""
+    start, marker = min(starts, key=lambda item: item[0])
+    rest = block[start + len(marker) :]
+    end_positions = [pos for pos in (rest.find(marker) for marker in stop_markers) if pos >= 0]
+    separator = re.search(r"\n\s*(?:---|\*\*\*|#{1,6}\s+)", rest)
+    if separator:
+        end_positions.append(separator.start())
+    if end_positions:
+        rest = rest[: min(end_positions)]
+    return rest.strip().strip('"“”').strip()
+
+
+def _unique(items: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        cleaned = re.sub(r"\s+", "", item).strip("：:；;，,。.!！?？")
+        if 1 < len(cleaned) <= 24 and cleaned not in seen:
+            seen.add(cleaned)
+            result.append(cleaned)
+    return result
+
+
+def _extract_keywords(answer: str, weak_tip: str, question: str) -> list[str]:
+    raw_explicit: list[str] = []
+    for hit in re.finditer(r"关键(?:词)?[：:]\s*([^\n。]*)", weak_tip):
+        raw_explicit.extend(
+            # 斜杠可能是路径或协议名的一部分（/etc/hosts、TCP/IP），不能作为分隔符。
+            re.split(r"[、,，；;｜|和及=＝\s]+|——|--|->|→", hit.group(1))
+        )
+    context = f"{question}\n{answer}"
+    explicit = [item for item in _unique(raw_explicit) if item in context]
+
+    cue_blacklist = {
+        "标准方案",
+        "测试重点",
+        "硬件实现",
+        "为什么这么设计",
+        "测试时怎么测",
+        "注意事项",
+        "一句话",
+        "第一步",
+        "第二步",
+        "第三步",
+    }
+
+    def cue_phrases() -> list[str]:
+        phrases: list[str] = []
+        cue_pattern = re.compile(
+            r"(?:^|[\n|；;。]|[①②③④⑤⑥⑦⑧⑨⑩])\s*[①②③④⑤⑥⑦⑧⑨⑩]?\s*([^|\n：:；;。]{2,24}?)\s*——"
+        )
+        for match in cue_pattern.finditer(answer):
+            phrase = match.group(1).strip()
+            phrase = re.sub(r"^[①②③④⑤⑥⑦⑧⑨⑩]\s*", "", phrase)
+            phrase = re.sub(r"^(?:适合|用于|包括|通过|按照|基于|需要|必须|就是|是)", "", phrase)
+            if phrase not in cue_blacklist:
+                phrases.append(phrase)
+
+        for match in re.finditer(r"[‘'“\"]([^’'”\"]{2,28})[’'”\"]", answer):
+            prefix = answer[max(0, match.start() - 20) : match.start()]
+            # 只把「一句话/核心」后的总结性引号拆成线索，避免把口播示例里的整句话当成关键词。
+            if not any(marker in prefix for marker in ("一句话", "核心是", "必须说出", "核心")):
+                continue
+            for part in re.split(r"[、，,；;]\s*", match.group(1)):
+                part = part.strip()
+                if 2 <= len(part) <= 14 and not re.search(r"[。！？!?]", part):
+                    phrases.append(part)
+
+        for match in re.finditer(
+            r"第[一二三四五六七八九十0-9]+步：\s*([^，,。；;：:\n|—–-]{2,20})",
+            answer,
+        ):
+            phrase = match.group(1).strip()
+            if not phrase.startswith("不要"):
+                phrases.append(phrase)
+        return [item for item in _unique(phrases) if item in answer]
+
+    def present(terms: tuple[str, ...]) -> list[str]:
+        found = []
+        for term in terms:
+            position = answer.find(term)
+            if position < 0 and term in question:
+                position = len(answer) + question.find(term)
+            if position >= 0:
+                found.append((position, term))
+        return [term for _, term in sorted(found, key=lambda item: item[0])]
+
+    terms = present(DOMAIN_TERMS)[:6]
+    if len(terms) < 4:
+        terms.extend(term for term in present(GENERIC_TERMS) if term not in terms)
+
+    keywords: list[str] = []
+
+    def add_keyword(keyword: str) -> None:
+        keyword = keyword.strip()
+        if not keyword or any(keyword == existing or keyword in existing or existing in keyword for existing in keywords):
+            return
+        keywords.append(keyword)
+
+    for keyword in explicit:
+        add_keyword(keyword)
+    for keyword in cue_phrases():
+        add_keyword(keyword)
+    for keyword in terms:
+        add_keyword(keyword)
+
+    return _unique(keywords)[:8]
+
+
+def extract_questions(text: str, include_inline: bool = False) -> list[dict]:
+    """按编号抽题，附带章节、意图、参考答案和原文关键词。"""
+    matches = list(QUESTION_HEADER_RE.finditer(text or ""))
+    headings = [
+        (match.start(), match.group(1))
+        for match in SECTION_RE.finditer(text or "")
+        if not QUESTION_HEADER_RE.match(match.group(0).strip())
+    ]
+    found: dict[str, dict] = {}
+
+    for index, match in enumerate(matches):
+        label, body = match.group(1), match.group(2)
+        if label in found:
+            continue
+        block_end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        block = text[match.start() : block_end]
+        section = ""
+        before = [heading for pos, heading in headings if pos < match.start()]
+        if before:
+            section = before[-1]
+
+        answer = _marker_content(block, ANSWER_MARKERS, STOP_MARKERS)[:1800]
+        weak_tip = _marker_content(block, WEAK_MARKERS, STOP_MARKERS)[:600]
+        intent = _marker_content(
+            block,
+            ("【面试官真实意图】", "[面试官真实意图]"),
+            ANSWER_MARKERS + WEAK_MARKERS + STOP_MARKERS,
+        )[:120]
         question = _clean(body)
         if len(question) < 4:
             continue
         found[label] = {
             "label": label,
             "question": question,
-            "intent": intent[:120],
+            "intent": intent,
             "section": section,
+            "reference_answer": answer,
+            "weak_tip": weak_tip,
+            "keywords": _extract_keywords(answer, weak_tip, question),
         }
-    return list(found.values())
+
+    items = list(found.values())
+    if not include_inline:
+        return items
+
+    seen_questions = {
+        re.sub(r"\s+", "", item["question"]).strip("：:；;，,。.!！?？")
+        for item in items
+    }
+    inline_items: list[dict] = []
+    for index, match in enumerate(INLINE_QA_RE.finditer(text or ""), start=1):
+        question = _clean(re.sub(r"\s+", " ", match.group(1)).strip())
+        answer = re.sub(r"\n{3,}", "\n\n", match.group(2)).strip().strip('"“”').strip()
+        normalized = re.sub(r"\s+", "", question).strip("：:；;，,。.!！?？")
+        if len(question) < 4 or len(answer) < 10 or normalized in seen_questions:
+            continue
+        before = [heading for pos, heading in headings if pos < match.start()]
+        seen_questions.add(normalized)
+        inline_items.append(
+            {
+                "label": f"AD{index}",
+                "question": question,
+                "intent": "",
+                "section": before[-1] if before else "",
+                "reference_answer": answer[:1800],
+                "weak_tip": "",
+                "keywords": _extract_keywords(answer[:1800], "", question),
+            }
+        )
+    return items + inline_items
 
 
 def load_role_questions(role_key: str, limit: int = 40) -> list[dict]:
@@ -222,8 +449,8 @@ def load_role_questions(role_key: str, limit: int = 40) -> list[dict]:
         document = knowledge_service.load_document(summary["doc_id"])
         if not document:
             continue
-        text = "\n".join(document.get("chunks") or [])
-        for item in extract_questions(text):
+        text = _merge_overlapping_chunks(document.get("chunks") or [])
+        for item in extract_questions(text, include_inline=rule.parse_inline_qa):
             if is_own and rule.accepts(item):
                 item["source"] = title
                 collected.append(item)

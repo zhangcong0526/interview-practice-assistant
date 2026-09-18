@@ -299,11 +299,12 @@ QUIZ_SYSTEM = """你是一位 IT 测试岗位的命题老师，负责根据用�
 3. 干扰项必须合理：要像真的、有迷惑性，通常是相近概念、常见误解或部分正确的说法。不要出现明显荒谬或一眼排除的选项。
 4. 题干要自包含，不要出现"根据上述资料""如文中所述"这类指代，用户答题时看不到原文。
 5. explanation 要解释为什么正确答案对，并且逐一说明主要干扰项错在哪里，帮助用户真正弄懂。至少 60 字。
-6. topic 填这道题考查的知识点名称，尽量与用户勾选的关键词保持一致，便于统计薄弱环节。
+6. topic 必须直接使用用户勾选的知识点名称，或使用明确等价别名，便于统计薄弱环节；不要自创近义知识点名。
 7. difficulty 只能是 "easy"、"medium"、"hard" 之一，整份试卷难度要有梯度。
 8. source_title 填这道题依据的资料标题，资料节选中会标明。
 9. 同一个知识点最多出 2 道题，题目之间不要重复考查同一个事实点。
-10. 全部使用简体中文，保留必要的英文技术名词。
+10. 避开用户列出的已经考过的题干：不能只替换几个字、调换语序或把陈述句改成否定句；必须更换业务场景、输入条件、故障现象、排查顺序或判断角度。
+11. 全部使用简体中文，保留必要的英文技术名词。
 
 只输出 JSON，不要输出任何 JSON 之外的内容。JSON 结构必须严格遵守如下模式：
 """ + QUIZ_SCHEMA
@@ -316,6 +317,7 @@ def build_quiz_user(
     difficulty: str = "mixed",
     avoid_stems: list[str] | None = None,
     weak_topics: list[str] | None = None,
+    coverage_hint: list[str] | None = None,
 ) -> str:
     parts: list[str] = []
     if keywords:
@@ -349,6 +351,12 @@ def build_quiz_user(
         parts.append(
             "【已经考过的题目（不要重复出题，换角度考查）】\n"
             + "\n".join(f"- {stem}" for stem in avoid_stems[:40])
+        )
+    if coverage_hint:
+        parts.append(
+            "【知识点题型覆盖情况】\n"
+            + "\n".join(coverage_hint)
+            + "\n同一知识点再次出现时，必须更换题型和考查场景，不能只改题干措辞。"
         )
 
     parts.append("【学习资料】\n" + material.strip())
@@ -546,7 +554,7 @@ EXPRESSION_SYSTEM = """你是一位面试表达教练，专门帮「脑子里有
 候选人刚做完一道单题口述练习，你会看到题目、他的转写文本和系统算出的客观指标（语速、语气词、口头禅、卡顿重复、结构信号、三项分数）。
 
 你的任务：
-1. 只评价表达方式，不评价技术答案的对错，也不要补充技术知识。
+1. 只评价表达方式，不评价技术答案的对错，也不要补充技术知识。照读档不考察记忆，关键词档重点看线索衔接，无提示档才按真实面试准备度判断。
 2. 候选人容易紧张、太看重结果。你的语气要像陪练而不是裁判，先给具体的肯定（strengths），再给 2 到 4 条可以立刻执行的改进（fixes）。
 3. fixes 必须具体到可操作的动作，例如「开场先用一句话直接回答结论，再展开两点理由」「把 5 个『然后』换成停顿」，不要写「提升表达能力」这种空话。
 4. example：挑候选人原文里最别扭的一句话，保留他原本的意思，改写成更干净利落的说法；不许替他编造事实或数字。
@@ -566,9 +574,46 @@ EXPRESSION_SYSTEM = """你是一位面试表达教练，专门帮「脑子里有
 }"""
 
 
-def build_expression_user(role_name: str, question: str, transcript: str, metrics: dict) -> str:
+SPEAKING_KEYWORD_SCHEMA = """{
+  "keywords": ["关键词1", "关键词2"]
+}"""
+
+SPEAKING_KEYWORD_SYSTEM = """你是一位面试表达训练的口播提示词设计专家。
+
+你会收到一道面试题和它的参考答案。请为「关键词串联」训练模式生成 5 到 8 个提示词，帮助候选人按参考答案的叙述顺序回忆并组织表达。
+
+严格要求：
+1. 关键词必须来自题干或参考答案，尽量使用参考答案中的原文术语或原短语，禁止补充答案中没有的事实、工具、方法或结论。
+2. 每个关键词只做短提示，长度建议 2 到 14 个汉字（英文术语可适当放宽），不能是完整句子，不能带编号、项目符号或解释。
+3. 按参考答案的叙述顺序输出：先结论或核心机制，再关键细节、例子、测试/落地要点。
+4. 不要输出「先给结论」「具体例子」「行动改变」「收尾观点」这类不在答案中的通用框架词。
+5. 英文缩写、路径、协议名必须保持原文形式，例如 /etc/hosts、ROS_MASTER_URI、QoS，不能拆开。
+6. 全部使用简体中文，保留必要英文术语，只输出 JSON。
+
+输出 JSON 结构：
+""" + SPEAKING_KEYWORD_SCHEMA
+
+
+def build_expression_keyword_user(question: str, answer: str) -> str:
+    return "\n\n".join(
+        [
+            "【面试题】\n" + question.strip(),
+            "【参考答案】\n" + answer.strip(),
+            "请基于这道题的参考答案，生成 5 到 8 个可用于口播串联的原文关键词。",
+        ]
+    )
+
+
+def build_expression_user(
+    role_name: str,
+    question: str,
+    transcript: str,
+    metrics: dict,
+    practice_mode: str = "无提示实战",
+) -> str:
     scores = metrics.get("scores") or {}
     lines = [
+        f"【训练档位】{practice_mode}",
         f"【练习方向】{role_name}",
         f"【题目】{question}",
         (

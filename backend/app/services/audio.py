@@ -47,6 +47,17 @@ async def compress_for_asr(src: Path, dst: Path) -> Path:
     return dst
 
 
+async def extract_for_asr_wav(src: Path, dst: Path) -> Path:
+    """短录音转 16kHz 单声道 PCM，避免浏览器 Opus 再做一次有损编码。"""
+    await _run(
+        [
+            "ffmpeg", "-y", "-i", str(src), "-vn", "-ac", "1", "-ar", "16000",
+            "-c:a", "pcm_s16le", str(dst),
+        ]
+    )
+    return dst
+
+
 async def split_if_needed(
     path: Path, max_bytes: int, workdir: Path, segment_seconds: int = 600
 ) -> list[tuple[Path, float]]:

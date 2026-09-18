@@ -234,7 +234,11 @@ export default function App() {
   return (
     <div className="min-h-screen bg-zinc-100">
       <header className="border-b border-zinc-200 bg-white">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-4">
+        <div
+          className={`mx-auto flex items-center justify-between gap-4 py-4 ${
+            view === 'quiz' ? 'max-w-[1800px] px-3' : 'max-w-6xl px-4'
+          }`}
+        >
           <div className="flex items-center gap-3">
             <span className="flex size-10 items-center justify-center rounded-lg bg-emerald-600 text-white">
               <BrainCircuit className="size-5" aria-hidden="true" />
@@ -293,7 +297,11 @@ export default function App() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl space-y-5 px-4 py-6">
+      <main
+        className={`mx-auto space-y-5 py-6 ${
+          view === 'quiz' ? 'max-w-[1800px] px-3' : 'max-w-6xl px-4'
+        }`}
+      >
         {view === 'practice' && <Stepper current={activeStep} />}
 
         {view === 'practice' && error && (
@@ -312,12 +320,24 @@ export default function App() {
         )}
 
         {view === 'quiz' && (
-          <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
-            <div className="min-w-0 space-y-5">
+          <>
+            <div className="grid gap-5 xl:grid-cols-[260px_minmax(0,1fr)_300px]">
+            <aside className="order-3 min-w-0 xl:order-1">
+              <KnowledgeLibrary documents={documents} onDocumentsChange={setDocuments} />
+            </aside>
+
+            <div className="order-1 min-w-0 space-y-5 xl:order-2">
+              <p className="flex items-start gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2.5 text-xs leading-5 text-zinc-500">
+                <NotebookPen className="mt-0.5 size-3.5 shrink-0 text-zinc-400" aria-hidden="true" />
+                <span>
+                  考题依据知识库原文命题，客观题在本地判分；错题会自动进入错题本。
+                </span>
+              </p>
               {quizPhase === 'setup' && (
                 <QuizSetup
                   documents={documents}
                   mistakeCount={mistakes.length}
+                  progress={progress}
                   onPaperReady={handlePaperReady}
                 />
               )}
@@ -331,27 +351,22 @@ export default function App() {
               {quizPhase === 'result' && attempt && (
                 <QuizResult
                   attempt={attempt}
+                  cumulativeMistakeCount={mistakes.length}
                   onRetryMistakes={handlePaperReady}
                   onBackToSetup={() => setQuizPhase('setup')}
                 />
               )}
             </div>
 
-            <aside className="min-w-0 space-y-5">
+            <aside className="order-2 min-w-0 space-y-5 xl:order-3">
               <MistakeBook
                 mistakes={mistakes}
                 progress={progress}
                 onMistakesChange={setMistakes}
               />
-              <KnowledgeLibrary documents={documents} onDocumentsChange={setDocuments} />
-              <p className="flex items-start gap-2 px-1 text-xs leading-5 text-zinc-500">
-                <NotebookPen className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-                <span>
-                  考题依据知识库原文命题，客观题在本地判分；错题会自动进入错题本，连续答对两次后移出。
-                </span>
-              </p>
             </aside>
           </div>
+          </>
         )}
 
         {view === 'expression' && (

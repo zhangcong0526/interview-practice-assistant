@@ -13,6 +13,7 @@ import {
   UserRound,
   Volume2,
   VolumeX,
+  Workflow,
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
@@ -41,6 +42,7 @@ const ROLE_ICONS: Record<string, typeof Bot> = {
   robot_hardware: Bot,
   software_qa: MonitorSmartphone,
   ai_qa: BrainCircuit,
+  ai_app_dev: Workflow,
 }
 
 const ROLE_STORAGE_KEY = 'opc-interview-role'
@@ -358,7 +360,7 @@ export function MockInterview({
         {roleOptions.length > 0 && (
           <div className="mt-4">
             <span className="field-label">意向岗位</span>
-            <div className="grid gap-2 sm:grid-cols-3">
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
               {roleOptions.map((option) => {
                 const Icon = ROLE_ICONS[option.key] ?? UserRound
                 const selected = option.key === roleKey

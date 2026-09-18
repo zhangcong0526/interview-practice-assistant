@@ -208,6 +208,8 @@ export interface ResumeAdvice {
   created_at: number
 }
 
+export type ExpressionPracticeMode = 'read' | 'keywords' | 'blind'
+
 export interface ExpressionQuestion {
   question: string
   label: string
@@ -215,6 +217,8 @@ export interface ExpressionQuestion {
   section: string
   role_key: string
   role_name: string
+  reference_answer: string
+  keywords: string[]
 }
 
 export interface ExpressionMetrics {
@@ -249,16 +253,26 @@ export interface ExpressionCoach {
   mindset_tip: string
 }
 
+export interface ExpressionProgression {
+  mode: ExpressionPracticeMode
+  mode_name: string
+  passed: boolean
+  next_mode: ExpressionPracticeMode | 'next_question'
+  message: string
+}
+
 export interface ExpressionSession {
   session_id: string
   created_at: number
   practice_date: string
   role_key: string
   role_name: string
+  practice_mode: ExpressionPracticeMode
   question: string
   question_label: string
   transcript: string
   metrics: ExpressionMetrics
+  progression: ExpressionProgression
   coach: ExpressionCoach
 }
 
@@ -268,10 +282,14 @@ export interface ExpressionProgress {
   streak_days: number
   today_count: number
   daily_goal: number
+  mode_counts: Record<ExpressionPracticeMode, number>
+  blind_total: number
+  blind_average: number
   averages: { fluency?: number; structure?: number; confidence?: number }
   trend: Array<{
     date: string
     created_at: number
+    practice_mode: ExpressionPracticeMode
     fluency: number
     structure: number
     confidence: number
@@ -339,6 +357,68 @@ export interface WeakTopic {
   next_actions: string[]
 }
 
+export interface QuizTypeStat {
+  type: QuestionType
+  label: string
+  total: number
+  correct: number
+  accuracy: number
+}
+
+export interface QuizModuleStat {
+  module: string
+  total: number
+  correct: number
+  accuracy: number
+  topic_count: number
+  mastered_topic_count: number
+  weak_topic_count: number
+  active_mistake_count: number
+  mastered_ratio: number
+  type_stats: QuizTypeStat[]
+  status: MasteryLevel | 'developing' | 'beginner'
+  recommendation: string
+}
+
+export interface MasteredTopic {
+  topic: string
+  total: number
+  correct: number
+  accuracy: number
+  streak: number
+  level: MasteryLevel
+  by_type: Partial<Record<QuestionType, { total: number; correct: number }>>
+  verified_types: QuestionType[]
+  cross_type_verified: boolean
+  module?: string
+}
+
+export interface FocusTopic extends MasteredTopic {
+  reasons: string[]
+  missing_types: QuestionType[]
+  recommended_action: string
+}
+
+export interface NextPaperSuggestion {
+  keywords: string[]
+  single: number
+  multiple: number
+  judge: number
+  reason: string
+}
+
+export interface QuizLearningGuide {
+  summary: string
+  type_stats: QuizTypeStat[]
+  module_stats?: QuizModuleStat[]
+  mastered_topics: MasteredTopic[]
+  focus_topics: FocusTopic[]
+  next_paper: NextPaperSuggestion
+  interview_ready: boolean
+  interview_reasons: string[]
+  scope_note: string
+}
+
 export interface QuizReview {
   summary: string
   mastery_level: MasteryLevel
@@ -348,6 +428,7 @@ export interface QuizReview {
   study_plan: string[]
   encouragement: string
   review_error: string
+  learning_guide?: QuizLearningGuide
 }
 
 export interface QuizAttempt {
@@ -398,6 +479,10 @@ export interface TopicProgress {
   accuracy: number
   streak: number
   level: MasteryLevel
+  by_type?: Partial<Record<QuestionType, { total: number; correct: number }>>
+  verified_types?: QuestionType[]
+  cross_type_verified?: boolean
+  module?: string
 }
 
 export interface QuizProgress {
@@ -407,6 +492,15 @@ export interface QuizProgress {
   answered_total: number
   correct_total: number
   overall_accuracy: number
+  type_stats: QuizTypeStat[]
+  module_stats?: QuizModuleStat[]
+  mastered_topics: MasteredTopic[]
+  focus_topics: FocusTopic[]
+  next_paper: NextPaperSuggestion
+  interview_ready: boolean
+  interview_reasons: string[]
+  guide_summary: string
+  scope_note: string
 }
 
 export interface QuizGenerateRequest {
@@ -417,4 +511,13 @@ export interface QuizGenerateRequest {
   judge: number
   difficulty: string
   focus_weak?: boolean
+}
+
+export type MistakeQuizScope = 'current' | 'all'
+
+export interface MistakePaperRequest {
+  scope: MistakeQuizScope
+  attempt_id?: string
+  limit?: number
+  difficulty?: string
 }

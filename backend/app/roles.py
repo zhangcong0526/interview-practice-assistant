@@ -1,7 +1,7 @@
 """意向岗位画像。
 
 模拟面试按岗位切换考察重点：同一份简历，面机器人整机测试和面 AI 测试
-该问的东西完全不同。这里固化三个岗位的边界、考察维度和检索关键词，
+该问的东西完全不同。这里固化四个岗位的边界、考察维度和检索关键词，
 由 prompts 注入面试官上下文，并驱动知识库检索。
 """
 
@@ -178,8 +178,63 @@ AI_QA = RoleProfile(
     ],
 )
 
+AI_APP_DEV = RoleProfile(
+    key="ai_app_dev",
+    name="AI 应用开发（Agent）",
+    summary=(
+        "面向 RAG、Agent 与大模型应用的工程设计、开发、部署和优化，"
+        "关注上下文工程、工具调用、效果迭代、稳定性、安全与交付闭环。"
+    ),
+    default_jd=(
+        "负责大模型应用与 AI Agent 的方案设计和工程落地；"
+        "建设 Prompt、结构化输出、RAG 检索增强、Function Calling / MCP 工具调用、"
+        "记忆与多步工作流；完成模型选型、上下文管理、badcase 分析、Trace 追踪和反馈迭代；"
+        "保障应用低延迟、高可用与安全合规，并通过 Docker / Kubernetes、CI/CD、"
+        "灰度发布、监控告警和降级回滚完成上线运维。"
+    ),
+    focus_areas=[
+        "大模型基础工程：Token、上下文窗口、temperature、模型选型、成本与延迟权衡",
+        "Prompt 工程与结构化输出：指令设计、JSON Schema、输出校验、重试和兜底策略",
+        "RAG 应用开发：文档切块、Embedding、向量库、混合检索、rerank、引用溯源与知识库更新",
+        "Agent 工程：任务规划、短期/长期记忆、Function Calling、MCP、Skill、工具权限和多智能体协作",
+        "工作流可靠性：超时、重试、幂等、人工确认、死循环检测、越权防护与失败恢复",
+        "上下文工程与效果迭代：Trace、badcase 沉淀、反馈闭环、提示词和检索策略的可观测回归",
+        "性能与容量：P95/P99、QPS、缓存、模型路由、限流、熔断、异步推理和并发资源规划",
+        "工程化交付：Docker、Kubernetes、CI/CD、灰度、回滚、监控、告警和降级方案",
+        "安全合规：Prompt 注入防护、敏感信息脱敏、工具最小权限、输出审计与数据边界",
+    ],
+    probe_points=[
+        "追问一个真实 Agent 或 RAG 功能从需求到上线的完整链路，而不是只停留在框架名词",
+        "追问检索不准、模型幻觉、工具调用失败、上下文超长时分别如何定位和修复",
+        "追问结构化输出如何保证可解析，解析失败或工具返回脏数据时如何兜底",
+        "追问模型、向量库、Embedding、rerank、编排框架的选型依据和成本收益",
+        "追问 Trace、日志、指标和 badcase 如何驱动下一轮迭代",
+        "追问高并发或慢响应场景下的缓存、异步、限流、熔断和降级设计",
+        "候选人若只堆 LangChain、MCP、多智能体等名词，要立刻追问实际业务痛点和落地细节",
+    ],
+    out_of_scope=[
+        "不要问机器人整机、CAN/485、ROS、SLAM、EVT/DVT/PVT 等硬件整机测试内容",
+        "不要把主线变成传统 Web/App/小程序的功能测试；传统软件只作为 AI 应用承载端讨论",
+        "幻觉治理和评测只从开发落地、质量内建与线上反馈角度追问，不按 AI 测试岗的评测体系展开",
+    ],
+    search_terms=[
+        "Token 上下文窗口 temperature 模型选型 Prompt JSON Schema 结构化输出",
+        "RAG 文档切块 Embedding 向量数据库 混合检索 rerank 引用溯源",
+        "Agent 规划 记忆 Function Calling MCP Skill 多智能体 工作流",
+        "LLM应用 性能 P95 P99 QPS 缓存 模型路由 限流 熔断 异步推理",
+        "Docker Kubernetes CI CD 灰度 回滚 监控 降级 Trace badcase 安全",
+    ],
+    resume_terms=[
+        "AI", "大模型", "LLM", "RAG", "Agent", "智能体", "MCP", "Function Calling",
+        "Prompt", "提示词", "Embedding", "向量数据库", "知识库", "工作流", "Skill",
+        "DeepAgent", "vLLM", "Docker", "Kubernetes", "K8s", "CI/CD", "GPU", "模型路由",
+        "Trace", "代码审计", "用例生成", "rerank", "上下文", "工具调用", "限流", "熔断",
+    ],
+)
+
+
 ROLE_PROFILES: dict[str, RoleProfile] = {
-    profile.key: profile for profile in (ROBOT_HARDWARE, SOFTWARE_QA, AI_QA)
+    profile.key: profile for profile in (ROBOT_HARDWARE, SOFTWARE_QA, AI_QA, AI_APP_DEV)
 }
 
 

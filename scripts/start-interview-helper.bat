@@ -16,8 +16,8 @@ echo.
 
 if not exist "%PROJECT_DIR%" (
     echo [错误] 找不到项目目录：%PROJECT_DIR%
-    echo        如果项目已经移动位置，请用记事本打开本脚本，
-    echo        修改第 6 行的 PROJECT_DIR 后重试。
+    echo        脚本会按自身所在目录自动推导项目根目录；
+    echo        如果移动过项目，请保留 scripts 目录的相对位置。
     goto :fail
 )
 

@@ -26,6 +26,18 @@
 - 错题本与掌握度追踪：错题自动归档，按知识点统计正确率，判断能否进入下一板块
 - 知识库防重复：按正文内容判重，同一份资料换文件名再传会被拦下并提示已有文档名
 
+## 界面预览
+
+> 以下截图仅用于展示通用界面，涉及个人简历、知识库标题和练习统计的区域已做模糊处理。
+
+![面试练习](docs/screenshots/01-practice.png)
+
+![在线刷题](docs/screenshots/02-quiz.png)
+
+![表达训练](docs/screenshots/03-expression.png)
+
+![模型配置](docs/screenshots/04-model-config.png)
+
 ## 环境要求
 
 - Git
@@ -45,7 +57,7 @@ winget install Gyan.FFmpeg
 
 安装后请重新打开命令行窗口，让 PATH 生效。
 
-## 快速开始（Windows）
+## 安装步骤（Windows）
 
 1. 克隆仓库：
 
@@ -64,7 +76,19 @@ winget install Gyan.FFmpeg
 - 启动后端 `http://127.0.0.1:8000`；
 - 启动前端并打开 `http://127.0.0.1:5173/`。
 
-首次生成 `backend/.env` 后，按脚本提示填写：
+### 配置步骤
+
+首次启动后必须配置一个可用的大模型，AI 分析、在线命题、模拟面试点评和表达训练反馈才能正常工作。推荐直接在页面右上角完成：
+
+1. 打开「模型配置」；
+2. 选择 DeepSeek / 火山引擎 Ark / MiniMax / OpenAI 兼容服务；
+3. 粘贴 API Key，确认 Base URL；
+4. 点击模型输入框右侧的下拉箭头，自动获取当前厂商可用模型 ID，也可以手动输入；
+5. 点击「测试连接」，显示成功后再保存。
+
+Key 只写入本机 `backend/.env`，界面只显示掩码；保存后立即生效，不需要重启服务。火山引擎 Ark 的模型值可填官方 Model ID 或你创建的接入点 ID。
+
+也可以直接编辑 `backend/.env`，最小配置如下：
 
 ```ini
 LLM_PROVIDER=deepseek
@@ -76,7 +100,7 @@ MAX_UPLOAD_SIZE_MB=2048
 UPLOAD_CHUNK_MB=8
 ```
 
-如果首次启动时跳过填写，页面仍可打开，但 AI 分析、在线命题、模拟面试点评会不可用。也可以在页面右上角打开「模型配置」，在线切换 DeepSeek、火山引擎 Ark、MiniMax 或 OpenAI 兼容服务，填写 API Key、Base URL 和模型名，并点击「测试连接」做一次轻量真实调用；模型名输入框旁的下拉箭头会自动拉取当前厂商的可用模型 ID，也可以直接手动输入。Key 只写入本机 `backend/.env`，界面只显示掩码；保存后立即生效，不需要重启服务。火山引擎 Ark 的模型值可填官方 Model ID 或你创建的接入点 ID。如果继续手工编辑文件，补存 `backend/.env` 后双击 `stop.bat` 停止服务，再重新运行 `start.bat`。
+如果手工编辑过 `backend/.env`，保存后双击 `stop.bat` 停止服务，再重新运行 `start.bat`。
 
 使用期间任务栏中最小化的「面试助手-后端」和「面试助手-前端」窗口不要关闭。用完后双击根目录 `stop.bat`，脚本会停止 8000 和 5173 端口上的服务。
 

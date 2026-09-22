@@ -159,12 +159,36 @@ if not exist "%ENV_FILE%" (
 )
 :env_ready
 
-set "HAS_DEEPSEEK_KEY="
+set "ACTIVE_LLM_PROVIDER=deepseek"
+if defined LLM_PROVIDER set "ACTIVE_LLM_PROVIDER=%LLM_PROVIDER%"
 for /f "usebackq eol=# tokens=1,* delims==" %%A in ("%ENV_FILE%") do (
-    if /I "%%A"=="DEEPSEEK_API_KEY" if not "%%B"=="" set "HAS_DEEPSEEK_KEY=1"
+    if /I "%%A"=="LLM_PROVIDER" set "ACTIVE_LLM_PROVIDER=%%B"
 )
-if not defined HAS_DEEPSEEK_KEY (
-    echo [WARN] DEEPSEEK_API_KEY is not configured. The UI opens, but AI analysis, quiz generation, and interview review are unavailable.
+set "HAS_ACTIVE_KEY="
+if /I "!ACTIVE_LLM_PROVIDER!"=="deepseek" (
+    if defined DEEPSEEK_API_KEY set "HAS_ACTIVE_KEY=1"
+    for /f "usebackq eol=# tokens=1,* delims==" %%A in ("%ENV_FILE%") do (
+        if /I "%%A"=="DEEPSEEK_API_KEY" if not "%%B"=="" set "HAS_ACTIVE_KEY=1"
+    )
+) else if /I "!ACTIVE_LLM_PROVIDER!"=="ark" (
+    if defined ARK_API_KEY set "HAS_ACTIVE_KEY=1"
+    for /f "usebackq eol=# tokens=1,* delims==" %%A in ("%ENV_FILE%") do (
+        if /I "%%A"=="ARK_API_KEY" if not "%%B"=="" set "HAS_ACTIVE_KEY=1"
+    )
+) else if /I "!ACTIVE_LLM_PROVIDER!"=="minimax" (
+    if defined MINIMAX_API_KEY set "HAS_ACTIVE_KEY=1"
+    for /f "usebackq eol=# tokens=1,* delims==" %%A in ("%ENV_FILE%") do (
+        if /I "%%A"=="MINIMAX_API_KEY" if not "%%B"=="" set "HAS_ACTIVE_KEY=1"
+    )
+) else if /I "!ACTIVE_LLM_PROVIDER!"=="openai" (
+    if defined OPENAI_API_KEY set "HAS_ACTIVE_KEY=1"
+    for /f "usebackq eol=# tokens=1,* delims==" %%A in ("%ENV_FILE%") do (
+        if /I "%%A"=="OPENAI_API_KEY" if not "%%B"=="" set "HAS_ACTIVE_KEY=1"
+    )
+)
+if not defined HAS_ACTIVE_KEY (
+    echo [WARN] No API key configured for active LLM provider: !ACTIVE_LLM_PROVIDER!
+    echo        Configure DeepSeek, Volcengine Ark, MiniMax, or OpenAI in the UI header.
     echo        Configuration file: %ENV_FILE%
 )
 

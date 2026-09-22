@@ -11,12 +11,14 @@ import {
   NotebookPen,
   Play,
   RotateCcw,
+  Settings,
 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import {
   analyze,
   createTranscriptionJob,
   getActiveResume,
+  getLlmConfig,
   getQuizProgress,
   listKnowledgeDocuments,
   listMistakes,
@@ -28,6 +30,7 @@ import { ExpressionDrill } from './components/ExpressionDrill'
 import { KnowledgeLibrary } from './components/KnowledgeLibrary'
 import { MistakeBook } from './components/MistakeBook'
 import { MockInterview } from './components/MockInterview'
+import { ModelSettings } from './components/ModelSettings'
 import { QuizResult } from './components/QuizResult'
 import { QuizRunner } from './components/QuizRunner'
 import { QuizSetup } from './components/QuizSetup'
@@ -44,6 +47,7 @@ import type {
   QuizPaper,
   QuizProgress,
   ResumeRecord,
+  LlmConfig,
 } from './types'
 
 type Phase = 'input' | 'analyzing' | 'report'
@@ -88,6 +92,8 @@ export default function App() {
   const [attempt, setAttempt] = useState<QuizAttempt | null>(null)
   const [mistakes, setMistakes] = useState<MistakeItem[]>([])
   const [progress, setProgress] = useState<QuizProgress | null>(null)
+  const [llmConfig, setLlmConfig] = useState<LlmConfig | null>(null)
+  const [modelSettingsOpen, setModelSettingsOpen] = useState(false)
 
   useEffect(() => {
     window.localStorage.setItem('opc-jd', jd)
@@ -107,6 +113,12 @@ export default function App() {
     getActiveResume()
       .then(setActiveResume)
       .catch(() => setActiveResume(null))
+  }, [])
+
+  useEffect(() => {
+    getLlmConfig()
+      .then(setLlmConfig)
+      .catch(() => setLlmConfig(null))
   }, [])
 
   const refreshQuizState = useCallback(async () => {
@@ -293,6 +305,24 @@ export default function App() {
                 重新开始
               </button>
             )}
+            <button
+              type="button"
+              className={`secondary-btn px-3 py-2 ${
+                llmConfig && !llmConfig.configured
+                  ? 'border-amber-300 text-amber-700 hover:border-amber-400 hover:bg-amber-50'
+                  : ''
+              }`}
+              onClick={() => setModelSettingsOpen(true)}
+            >
+              <Settings className="size-4" aria-hidden="true" />
+              模型配置
+              <span
+                className={`size-2 rounded-full ${
+                  llmConfig?.configured ? 'bg-emerald-500' : 'bg-amber-400'
+                }`}
+                aria-hidden="true"
+              />
+            </button>
           </div>
         </div>
       </header>
@@ -373,6 +403,14 @@ export default function App() {
           <div className="mx-auto w-full max-w-3xl">
             <ExpressionDrill />
           </div>
+        )}
+
+        {modelSettingsOpen && (
+          <ModelSettings
+            config={llmConfig}
+            onClose={() => setModelSettingsOpen(false)}
+            onSaved={setLlmConfig}
+          />
         )}
 
         {view === 'practice' && phase === 'input' && (

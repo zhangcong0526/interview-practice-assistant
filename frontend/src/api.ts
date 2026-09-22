@@ -3,6 +3,8 @@ import type {
   AnalyzeRequest,
   JobCreateResponse,
   JobState,
+  LlmConfig,
+  LlmProvider,
   KnowledgeChunk,
   KnowledgeDocument,
   MistakePaperRequest,
@@ -178,6 +180,45 @@ export function pollJob(
 
 export async function analyze(request: AnalyzeRequest): Promise<AnalysisReport> {
   return apiFetch<AnalysisReport>('/analyze', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  })
+}
+
+export async function getLlmConfig(): Promise<LlmConfig> {
+  return apiFetch<LlmConfig>('/config/llm')
+}
+
+export async function updateLlmConfig(request: {
+  provider: LlmProvider
+  deepseek_api_key?: string
+  deepseek_base_url?: string
+  deepseek_model?: string
+  ark_api_key?: string
+  ark_base_url?: string
+  ark_model?: string
+  minimax_api_key?: string
+  minimax_base_url?: string
+  minimax_model?: string
+  openai_api_key?: string
+  openai_base_url?: string
+  openai_model?: string
+}): Promise<LlmConfig> {
+  return apiFetch<LlmConfig>('/config/llm', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  })
+}
+
+export async function testLlmConfig(request: {
+  provider: LlmProvider
+  api_key?: string
+  base_url?: string
+  model?: string
+}): Promise<{ ok: boolean; message: string; latency_ms: number; model: string }> {
+  return apiFetch('/config/llm/test', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),

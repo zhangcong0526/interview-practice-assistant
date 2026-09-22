@@ -6,7 +6,18 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .routers import analyze, expression, interview, jobs, knowledge, quiz, resume, tts, uploads
+from .routers import (
+    analyze,
+    config,
+    expression,
+    interview,
+    jobs,
+    knowledge,
+    quiz,
+    resume,
+    tts,
+    uploads,
+)
 from .routers.jobs import RESULTS_DIR, WORK_DIR
 from .routers.uploads import UPLOADS_DIR
 
@@ -42,6 +53,7 @@ app.add_middleware(
 app.include_router(uploads.router)
 app.include_router(jobs.router)
 app.include_router(analyze.router)
+app.include_router(config.router)
 app.include_router(knowledge.router)
 app.include_router(interview.router)
 app.include_router(resume.router)

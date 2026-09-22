@@ -31,7 +31,7 @@
 - Node.js 20+
 - Python 3.11+
 - FFmpeg / FFprobe 已加入 PATH
-- DeepSeek API Key 用于 LLM 分析、命题和面试点评
+- DeepSeek / 火山引擎 Ark / MiniMax API Key 之一用于 LLM 分析、命题和面试点评
 - 语音转写默认本地运行，不需要额外 API Key
 
 Windows 用户可先安装依赖，再使用仓库根目录的一键启动脚本：
@@ -75,7 +75,7 @@ MAX_UPLOAD_SIZE_MB=2048
 UPLOAD_CHUNK_MB=8
 ```
 
-如果首次启动时跳过填写，页面仍可打开，但 AI 分析、在线命题、模拟面试点评会不可用。补存 `backend/.env` 后，双击 `stop.bat` 停止服务，再重新运行 `start.bat`。
+如果首次启动时跳过填写，页面仍可打开，但 AI 分析、在线命题、模拟面试点评会不可用。也可以在页面右上角打开「模型配置」，在线切换 DeepSeek、火山引擎 Ark、MiniMax 或 OpenAI 兼容服务，填写 API Key、Base URL 和模型名，并点击「测试连接」做一次轻量真实调用。Key 只写入本机 `backend/.env`，界面只显示掩码；保存后立即生效，不需要重启服务。火山引擎 Ark 的模型值可填官方 Model ID 或你创建的接入点 ID。如果继续手工编辑文件，补存 `backend/.env` 后双击 `stop.bat` 停止服务，再重新运行 `start.bat`。
 
 使用期间任务栏中最小化的「面试助手-后端」和「面试助手-前端」窗口不要关闭。用完后双击根目录 `stop.bat`，脚本会停止 8000 和 5173 端口上的服务。
 
@@ -126,7 +126,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-# 编辑 .env，填写 DEEPSEEK_API_KEY
+# 编辑 .env，按所选厂商填写对应 API Key
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
@@ -287,7 +287,7 @@ ffprobe -version
 
 ### 页面能打开，但 AI 功能不可用
 
-检查 `backend/.env` 中的 `DEEPSEEK_API_KEY` 是否已填写。修改后运行根目录 `stop.bat`，再运行 `start.bat`。本地 Whisper 转写不依赖这个 Key，但 LLM 分析、命题、点评需要它。
+检查 `backend/.env` 中当前启用厂商对应的 API Key 是否已填写，或在页面右上角「模型配置」中补填并测试连接。保存后立即生效。本地 Whisper 转写不依赖这个 Key，但 LLM 分析、命题、点评需要它。
 
 ### 5173 或 8000 端口被占用
 
@@ -313,8 +313,8 @@ npm ci
 frontend/   React + TypeScript + Vite，纯前端 SPA
 backend/    FastAPI + uvicorn
   app/
-    routers/    HTTP 接口层：录音分析、模拟面试、知识库、题库、TTS、简历、表达训练
-    services/   业务层：asr(faster-whisper) / tts(edge-tts) / llm(DeepSeek) /
+    routers/    HTTP 接口层：录音分析、模拟面试、知识库、题库、TTS、简历、表达训练、模型配置
+    services/   业务层：asr(faster-whisper) / tts(edge-tts) / llm(DeepSeek / Ark / MiniMax / OpenAI) /
                 knowledge(BM25 检索) / feishu(无头浏览器分页抓取) / question_bank /
                 quiz(本地判分与掌握度) / resume / resume_advisor / expression
     prompts.py  所有 LLM 提示词集中管理

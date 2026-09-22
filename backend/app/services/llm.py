@@ -15,6 +15,18 @@ def _provider_config() -> tuple[str, str, str]:
         if not settings.deepseek_api_key:
             raise LlmError("未配置 DEEPSEEK_API_KEY。请在 backend/.env 中设置。")
         return settings.deepseek_api_key, settings.deepseek_base_url, settings.deepseek_model
+    if settings.llm_provider == "ark":
+        if not settings.ark_api_key:
+            raise LlmError("未配置 ARK_API_KEY。请在模型配置页填写。")
+        if not settings.ark_model:
+            raise LlmError("未配置 ARK_MODEL。请填写火山方舟 Model ID 或接入点 ID。")
+        return settings.ark_api_key, settings.ark_base_url, settings.ark_model
+    if settings.llm_provider == "minimax":
+        if not settings.minimax_api_key:
+            raise LlmError("未配置 MINIMAX_API_KEY。请在模型配置页填写。")
+        if not settings.minimax_model:
+            raise LlmError("未配置 MINIMAX_MODEL。请填写 MiniMax 模型名。")
+        return settings.minimax_api_key, settings.minimax_base_url, settings.minimax_model
     if settings.llm_provider == "openai":
         if not settings.openai_api_key:
             raise LlmError("未配置 OPENAI_API_KEY。请在 backend/.env 中设置。")
@@ -22,11 +34,36 @@ def _provider_config() -> tuple[str, str, str]:
     raise LlmError(f"不支持的 LLM_PROVIDER: {settings.llm_provider}")
 
 
+def _completion(client: OpenAI, *, model: str, messages: list[dict], temperature: float, max_tokens: int, json_mode: bool):
+    kwargs = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+    if json_mode:
+        kwargs["response_format"] = {"type": "json_object"}
+    try:
+        return client.chat.completions.create(**kwargs)
+    except Exception as exc:
+        # MiniMax/Ark 兼容接口的 JSON Mode 支持范围可能随模型变化；提示词本身已要求 JSON，
+        # 因此仅在服务端明确不接受 response_format 时退回普通补全。
+        text = str(exc).lower()
+        if json_mode and any(
+            keyword in text
+            for keyword in ("response_format", "json_object", "json mode", "unsupported parameter")
+        ):
+            kwargs.pop("response_format", None)
+            return client.chat.completions.create(**kwargs)
+        raise
+
+
 def chat_json(system: str, user: str, max_tokens: int = 8000) -> dict:
     api_key, base_url, model = _provider_config()
     client = OpenAI(api_key=api_key, base_url=base_url)
     try:
-        resp = client.chat.completions.create(
+        resp = _completion(
+            client,
             model=model,
             messages=[
                 {"role": "system", "content": system},
@@ -34,7 +71,7 @@ def chat_json(system: str, user: str, max_tokens: int = 8000) -> dict:
             ],
             temperature=0.3,
             max_tokens=max_tokens,
-            response_format={"type": "json_object"},
+            json_mode=True,
         )
     except Exception as exc:
         raise LlmError(f"调用 LLM 失败: {exc}") from exc
@@ -59,12 +96,13 @@ def chat_json_messages(
     last_error: Exception | None = None
     for attempt in range(retries + 1):
         try:
-            resp = client.chat.completions.create(
+            resp = _completion(
+                client,
                 model=model,
                 messages=messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
-                response_format={"type": "json_object"},
+                json_mode=True,
             )
         except Exception as exc:
             raise LlmError(f"调用 LLM 失败: {exc}") from exc

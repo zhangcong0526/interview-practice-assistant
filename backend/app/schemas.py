@@ -132,3 +132,26 @@ class TTSRequest(BaseModel):
     voice: str = ""
     rate: int = Field(default=0, ge=-50, le=50)
     pitch: int = Field(default=0, ge=-50, le=50)
+
+
+class LlmConfigUpdate(BaseModel):
+    provider: str = Field(default="deepseek", pattern="^(deepseek|ark|minimax|openai)$")
+    deepseek_api_key: str = Field(default="", max_length=500)
+    deepseek_base_url: str = Field(default="", max_length=500)
+    deepseek_model: str = Field(default="", max_length=200)
+    ark_api_key: str = Field(default="", max_length=500)
+    ark_base_url: str = Field(default="", max_length=500)
+    ark_model: str = Field(default="", max_length=200)
+    minimax_api_key: str = Field(default="", max_length=500)
+    minimax_base_url: str = Field(default="", max_length=500)
+    minimax_model: str = Field(default="", max_length=200)
+    openai_api_key: str = Field(default="", max_length=500)
+    openai_base_url: str = Field(default="", max_length=500)
+    openai_model: str = Field(default="", max_length=200)
+
+
+class LlmConfigTestRequest(BaseModel):
+    provider: str = Field(default="deepseek", pattern="^(deepseek|ark|minimax|openai)$")
+    api_key: str = Field(default="", max_length=500)
+    base_url: str = Field(default="", max_length=500)
+    model: str = Field(default="", max_length=200)

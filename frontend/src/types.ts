@@ -41,6 +41,24 @@ export interface JobCreateResponse {
   job_id: string
 }
 
+export type LlmProvider = 'deepseek' | 'ark' | 'minimax' | 'openai'
+
+export interface LlmProviderConfig {
+  configured: boolean
+  masked_key: string
+  base_url: string
+  model: string
+}
+
+export interface LlmConfig {
+  provider: LlmProvider
+  configured: boolean
+  deepseek: LlmProviderConfig
+  ark: LlmProviderConfig
+  minimax: LlmProviderConfig
+  openai: LlmProviderConfig
+}
+
 export interface DimensionScores {
   relevance: number
   structure: number

@@ -4,11 +4,17 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    # LLM 提供方：deepseek | openai
+    # LLM 提供方：deepseek | ark | minimax | openai
     llm_provider: str = "deepseek"
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-chat"
+    ark_api_key: str = ""
+    ark_base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
+    ark_model: str = "doubao-seed-2-1-pro-260628"
+    minimax_api_key: str = ""
+    minimax_base_url: str = "https://api.minimaxi.com/v1"
+    minimax_model: str = "MiniMax-M2"
     openai_api_key: str = ""
     openai_base_url: str = "https://api.openai.com/v1"
     openai_model: str = "gpt-4o-mini"

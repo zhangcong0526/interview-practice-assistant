@@ -225,6 +225,18 @@ export async function testLlmConfig(request: {
   })
 }
 
+export async function listLlmModels(request: {
+  provider: LlmProvider
+  api_key?: string
+  base_url?: string
+}): Promise<{ provider: LlmProvider; base_url: string; models: string[] }> {
+  return apiFetch('/config/llm/models', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  })
+}
+
 export async function listKnowledgeDocuments(): Promise<KnowledgeDocument[]> {
   return apiFetch<KnowledgeDocument[]>('/knowledge/documents')
 }

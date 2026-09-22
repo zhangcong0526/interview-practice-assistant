@@ -260,11 +260,11 @@ export default function App() {
               <p className="text-xs text-zinc-500">录音复盘 · 逐题评分 · 知识库引用</p>
             </div>
           </div>
-          <div className="flex flex-wrap items-center justify-end gap-3">
-            <div className="inline-flex rounded-lg border border-zinc-300 bg-zinc-100 p-1">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <div className="inline-flex h-10 items-stretch rounded-lg border border-zinc-300 bg-zinc-100 p-1">
               <button
                 type="button"
-                className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition ${
+                className={`inline-flex items-center gap-1.5 rounded-md px-3 text-sm font-medium transition ${
                   view === 'practice'
                     ? 'bg-white text-zinc-900 shadow-sm'
                     : 'text-zinc-500 hover:text-zinc-700'
@@ -276,7 +276,7 @@ export default function App() {
               </button>
               <button
                 type="button"
-                className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition ${
+                className={`inline-flex items-center gap-1.5 rounded-md px-3 text-sm font-medium transition ${
                   view === 'quiz'
                     ? 'bg-white text-zinc-900 shadow-sm'
                     : 'text-zinc-500 hover:text-zinc-700'
@@ -288,7 +288,7 @@ export default function App() {
               </button>
               <button
                 type="button"
-                className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition ${
+                className={`inline-flex items-center gap-1.5 rounded-md px-3 text-sm font-medium transition ${
                   view === 'expression'
                     ? 'bg-white text-zinc-900 shadow-sm'
                     : 'text-zinc-500 hover:text-zinc-700'
@@ -300,14 +300,14 @@ export default function App() {
               </button>
             </div>
             {view === 'practice' && (
-              <button type="button" className="secondary-btn" onClick={restart}>
+              <button type="button" className="secondary-btn h-10 px-3 text-sm font-medium" onClick={restart}>
                 <RotateCcw className="size-4" aria-hidden="true" />
                 重新开始
               </button>
             )}
             <button
               type="button"
-              className={`secondary-btn px-3 py-2 ${
+              className={`secondary-btn h-10 px-3 text-sm font-medium ${
                 llmConfig && !llmConfig.configured
                   ? 'border-amber-300 text-amber-700 hover:border-amber-400 hover:bg-amber-50'
                   : ''
@@ -400,7 +400,7 @@ export default function App() {
         )}
 
         {view === 'expression' && (
-          <div className="mx-auto w-full max-w-3xl">
+          <div className="w-full">
             <ExpressionDrill />
           </div>
         )}

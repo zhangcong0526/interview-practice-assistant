@@ -1,6 +1,6 @@
-import { Activity, AlertTriangle, CheckCircle2, Loader2, Settings, X } from 'lucide-react'
-import { useEffect, useState } from 'react'
-import { testLlmConfig, updateLlmConfig } from '../api'
+import { Activity, AlertTriangle, CheckCircle2, ChevronDown, Loader2, Settings, X } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { listLlmModels, testLlmConfig, updateLlmConfig } from '../api'
 import type { LlmConfig, LlmProvider } from '../types'
 
 interface ModelSettingsProps {
@@ -57,6 +57,12 @@ export function ModelSettings({ config, onClose, onSaved }: ModelSettingsProps) 
   const [testResult, setTestResult] = useState('')
   const [testError, setTestError] = useState('')
   const [error, setError] = useState('')
+  const [availableModels, setAvailableModels] = useState<string[]>([])
+  const [loadingModels, setLoadingModels] = useState(false)
+  const [modelListMessage, setModelListMessage] = useState('')
+  const [modelListError, setModelListError] = useState('')
+  const [modelDropdownOpen, setModelDropdownOpen] = useState(false)
+  const modelFieldRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -66,9 +72,29 @@ export function ModelSettings({ config, onClose, onSaved }: ModelSettingsProps) 
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [onClose])
 
+  useEffect(() => {
+    if (!modelDropdownOpen) return
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!modelFieldRef.current?.contains(event.target as Node)) {
+        setModelDropdownOpen(false)
+      }
+    }
+    window.addEventListener('pointerdown', handlePointerDown)
+    return () => window.removeEventListener('pointerdown', handlePointerDown)
+  }, [modelDropdownOpen])
+
   const selected = config?.[provider]
 
+  const resetModelList = () => {
+    setAvailableModels([])
+    setModelListMessage('')
+    setModelListError('')
+    setModelDropdownOpen(false)
+  }
+
   const updateDraft = (field: keyof ProviderDraft, value: string) => {
+    if (field === 'api_key' || field === 'base_url') resetModelList()
     setDraft((current) => ({
       ...current,
       [provider]: {
@@ -81,6 +107,33 @@ export function ModelSettings({ config, onClose, onSaved }: ModelSettingsProps) 
   const resetTestState = () => {
     setTestResult('')
     setTestError('')
+  }
+
+  const loadModels = async (openAfter = false) => {
+    if (loadingModels || busy) return
+    setLoadingModels(true)
+    setModelListError('')
+    setModelListMessage('')
+    try {
+      const result = await listLlmModels({
+        provider,
+        api_key: draft[provider].api_key.trim(),
+        base_url: draft[provider].base_url.trim(),
+      })
+      setAvailableModels(result.models)
+      setModelListMessage(
+        result.models.length
+          ? `已获取 ${result.models.length} 个模型 ID。`
+          : '厂商未返回可选模型 ID。',
+      )
+      setModelDropdownOpen(openAfter && result.models.length > 0)
+    } catch (modelError) {
+      setModelListError(
+        modelError instanceof Error ? modelError.message : '获取模型列表失败。',
+      )
+    } finally {
+      setLoadingModels(false)
+    }
   }
 
   const submit = async () => {
@@ -175,6 +228,7 @@ export function ModelSettings({ config, onClose, onSaved }: ModelSettingsProps) 
               onClick={() => {
                 setProvider(item)
                 resetTestState()
+                resetModelList()
               }}
             >
               <span
@@ -220,15 +274,86 @@ export function ModelSettings({ config, onClose, onSaved }: ModelSettingsProps) 
               />
             </div>
             <div>
-              <label htmlFor="llm-model" className="field-label">
-                模型
-              </label>
-              <input
-                id="llm-model"
-                className="text-input"
-                value={draft[provider].model}
-                onChange={(event) => updateDraft('model', event.target.value)}
-              />
+              <div className="flex items-center justify-between gap-2">
+                <label htmlFor="llm-model" className="field-label">
+                  模型
+                </label>
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-1 text-xs font-medium text-zinc-600 transition hover:border-zinc-300 hover:text-zinc-900 disabled:cursor-not-allowed disabled:opacity-50"
+                  onClick={() => void loadModels()}
+                  disabled={loadingModels || busy}
+                >
+                  {loadingModels ? (
+                    <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+                  ) : (
+                    <Activity className="size-3.5" aria-hidden="true" />
+                  )}
+                  获取模型
+                </button>
+              </div>
+              <div ref={modelFieldRef} className="relative">
+                <input
+                  id="llm-model"
+                  className="text-input pr-10"
+                  value={draft[provider].model}
+                  onChange={(event) => updateDraft('model', event.target.value)}
+                />
+                <button
+                  type="button"
+                  className="absolute inset-y-0 right-0 flex items-center px-2 text-zinc-400 transition hover:text-zinc-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  onClick={() => {
+                    if (availableModels.length) {
+                      setModelDropdownOpen((open) => !open)
+                    } else {
+                      void loadModels(true)
+                    }
+                  }}
+                  disabled={loadingModels || busy}
+                  aria-expanded={modelDropdownOpen}
+                  aria-haspopup="listbox"
+                  aria-label="展开模型列表"
+                >
+                  {loadingModels ? (
+                    <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                  ) : (
+                    <ChevronDown className="size-4" aria-hidden="true" />
+                  )}
+                </button>
+                {modelDropdownOpen && (
+                  <div
+                    className="absolute top-full z-20 mt-1 max-h-56 w-full overflow-auto rounded-md border border-zinc-200 bg-white py-1 shadow-lg"
+                    role="listbox"
+                    aria-label="可用模型列表"
+                  >
+                    {availableModels.map((model) => (
+                      <button
+                        key={model}
+                        type="button"
+                        className={`block w-full truncate px-3 py-2 text-left text-sm transition hover:bg-zinc-50 ${
+                          draft[provider].model === model
+                            ? 'bg-emerald-50 font-medium text-emerald-700'
+                            : 'text-zinc-700'
+                        }`}
+                        onClick={() => {
+                          updateDraft('model', model)
+                          setModelDropdownOpen(false)
+                        }}
+                        role="option"
+                        aria-selected={draft[provider].model === model}
+                      >
+                        {model}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              {modelListMessage && (
+                <p className="mt-1 text-xs text-emerald-600">{modelListMessage}</p>
+              )}
+              {modelListError && (
+                <p className="mt-1 text-xs text-red-600">{modelListError}</p>
+              )}
             </div>
           </div>
         </div>

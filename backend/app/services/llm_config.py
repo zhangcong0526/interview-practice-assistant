@@ -9,7 +9,7 @@ from pathlib import Path
 from openai import OpenAI
 
 from ..config import settings
-from ..schemas import LlmConfigTestRequest, LlmConfigUpdate
+from ..schemas import LlmModelsRequest, LlmConfigTestRequest, LlmConfigUpdate
 
 
 ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
@@ -182,6 +182,35 @@ def test_config(request: LlmConfigTestRequest) -> dict:
         "model": model,
         "latency_ms": latency_ms,
         "message": "连通性正常，模型可调用。",
+    }
+
+
+def list_models(request: LlmModelsRequest) -> dict:
+    status = _provider_status(request.provider)
+    api_key = request.api_key.strip()
+    if not api_key:
+        key_field = PROVIDER_FIELDS[request.provider][0]
+        api_key = getattr(settings, key_field)
+    base_url = request.base_url.strip() or status["base_url"]
+    if not api_key:
+        raise ValueError("请先填写或保存 API Key。")
+    if not base_url:
+        raise ValueError("Base URL 不能为空。")
+
+    client = OpenAI(api_key=api_key, base_url=base_url, timeout=15.0, max_retries=0)
+    try:
+        response = client.models.list()
+    except Exception as exc:
+        raise ValueError(f"获取模型列表失败：{exc}") from exc
+
+    models = sorted(
+        {str(item.id).strip() for item in response.data if str(item.id).strip()},
+        key=str.casefold,
+    )[:500]
+    return {
+        "provider": request.provider,
+        "base_url": base_url,
+        "models": models,
     }
 def test_config(request) -> dict:
     status = _provider_status(request.provider)

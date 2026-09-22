@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 
-from ..schemas import LlmConfigTestRequest, LlmConfigUpdate
+from ..schemas import LlmModelsRequest, LlmConfigTestRequest, LlmConfigUpdate
 from ..services import llm_config
 
 router = APIRouter(prefix="/api/config", tags=["config"])
@@ -25,5 +25,13 @@ async def update_llm_config(request: LlmConfigUpdate):
 async def test_llm_config(request: LlmConfigTestRequest):
     try:
         return llm_config.test_config(request)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/llm/models")
+async def list_llm_models(request: LlmModelsRequest):
+    try:
+        return llm_config.list_models(request)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc

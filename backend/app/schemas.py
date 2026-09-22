@@ -155,3 +155,9 @@ class LlmConfigTestRequest(BaseModel):
     api_key: str = Field(default="", max_length=500)
     base_url: str = Field(default="", max_length=500)
     model: str = Field(default="", max_length=200)
+
+
+class LlmModelsRequest(BaseModel):
+    provider: str = Field(default="deepseek", pattern="^(deepseek|ark|minimax|openai)$")
+    api_key: str = Field(default="", max_length=500)
+    base_url: str = Field(default="", max_length=500)

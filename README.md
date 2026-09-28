@@ -104,6 +104,21 @@ UPLOAD_CHUNK_MB=8
 
 使用期间任务栏中最小化的「面试助手-后端」和「面试助手-前端」窗口不要关闭。用完后双击根目录 `stop.bat`，脚本会停止 8000 和 5173 端口上的服务。
 
+### 更新已有部署
+
+如果仓库已经克隆到本地，不需要重新 `git clone`。先确认本地没有未提交的重要改动，再拉取最新代码：
+
+```powershell
+cd D:\path\to\interview-practice-assistant
+git status
+git pull origin main
+.\start.bat
+```
+
+`start.bat` 会先清理 8000 和 5173 端口上的旧服务，再启动后端和前端。`backend/requirements.txt` 或 `frontend/package-lock.json` 没有变化时不会重复安装依赖；有变化时会自动安装。`backend/.env` 不在 Git 跟踪范围内，拉取最新代码不会覆盖你已经保存的 API Key 和模型配置。更新完成后，建议在浏览器里按 `Ctrl + F5` 强制刷新一次。
+
+如果 `git pull` 提示本地文件冲突，不要直接丢弃本地改动。先备份或提交自己的改动，再处理冲突。macOS 和 Linux 用户更新代码后，请按下方「手动部署」步骤重启。
+
 ### 创建桌面快捷方式
 
 建议右键仓库根目录的 `start.bat` 和 `stop.bat`，选择「发送到」→「桌面快捷方式」。不要直接把 `.bat` 复制到桌面，因为根目录脚本需要通过相对路径调用 `scripts/` 目录中的通用启动逻辑。

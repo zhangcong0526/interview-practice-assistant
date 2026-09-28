@@ -384,6 +384,14 @@ export interface QuizSourceReference {
   url: string
 }
 
+export interface ReviewStudyStep {
+  topic?: string
+  action: string
+  source_status?: '' | 'reinforce' | 'missing'
+  source_note?: string
+  source_refs?: QuizSourceReference[]
+}
+
 export interface QuizTypeStat {
   type: QuestionType
   label: string
@@ -452,7 +460,7 @@ export interface QuizReview {
   can_advance: boolean
   advance_reason: string
   weak_topics: WeakTopic[]
-  study_plan: string[]
+  study_plan: (string | ReviewStudyStep)[]
   encouragement: string
   review_error: string
   learning_guide?: QuizLearningGuide

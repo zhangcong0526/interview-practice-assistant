@@ -1556,6 +1556,11 @@ def _normalise_review(
             }
         )
 
+    study_plan = _normalise_review_steps(
+        review.get("study_plan") or [],
+        review_sources,
+    )
+
     # 正确率不达标时不允许放行，避免模型过于宽松。
     can_advance = bool(review.get("can_advance")) and accuracy >= 0.85
 
@@ -1565,12 +1570,53 @@ def _normalise_review(
         "can_advance": can_advance,
         "advance_reason": str(review.get("advance_reason") or "").strip(),
         "weak_topics": weak_topics,
-        "study_plan": [
-            str(v).strip() for v in (review.get("study_plan") or []) if str(v).strip()
-        ],
+        "study_plan": study_plan,
         "encouragement": str(review.get("encouragement") or "").strip(),
         "review_error": str(review.get("review_error") or "").strip(),
     }
+
+
+def _normalise_review_steps(
+    steps: list,
+    review_sources: dict[str, list[dict]] | None = None,
+) -> list[dict]:
+    """兼容旧版字符串步骤，并为新版步骤按知识点补齐原文依据。"""
+    normalised: list[dict] = []
+    for raw in steps:
+        if isinstance(raw, str):
+            item = {"action": raw.strip()}
+        elif isinstance(raw, dict):
+            item = raw
+        else:
+            continue
+
+        action = str(
+            item.get("action")
+            or item.get("step")
+            or item.get("description")
+            or ""
+        ).strip()
+        if not action:
+            continue
+
+        topic = str(item.get("topic") or "").strip()
+        source_refs = (review_sources or {}).get(topic) or [] if topic else []
+        source_status = str(item.get("source_status") or "").strip().lower()
+        if source_status not in ("reinforce", "missing"):
+            source_status = "reinforce" if source_refs else ""
+        if topic and not source_refs:
+            source_status = "missing"
+
+        normalised.append(
+            {
+                "topic": topic,
+                "action": action,
+                "source_status": source_status,
+                "source_note": str(item.get("source_note") or "").strip(),
+                "source_refs": source_refs,
+            }
+        )
+    return normalised[:8]
 
 
 # --------------------------------------------------------------------------
@@ -1766,4 +1812,13 @@ def get_attempt(attempt_id: str) -> dict:
             catalog,
         )
         copied["questions"].append(question_copy)
+    review = dict(copied.get("review") or {})
+    sources = {
+        str(item.get("topic") or "").strip(): list(item.get("source_refs") or [])
+        for item in review.get("weak_topics") or []
+        if isinstance(item, dict) and str(item.get("topic") or "").strip()
+    }
+    if "study_plan" in review:
+        review["study_plan"] = _normalise_review_steps(review.get("study_plan") or [], sources)
+        copied["review"] = review
     return copied

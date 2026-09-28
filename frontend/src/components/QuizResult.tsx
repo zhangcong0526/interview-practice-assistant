@@ -402,14 +402,71 @@ export function QuizResult({
         <section className="tool-card">
           <h3 className="text-base font-semibold text-zinc-900">复习步骤</h3>
           <ol className="mt-3 space-y-2.5">
-            {review.study_plan.map((step, index) => (
-              <li key={step} className="flex gap-3 text-sm leading-6 text-zinc-700">
-                <span className="flex size-6 shrink-0 items-center justify-center rounded-lg bg-emerald-600 text-xs font-semibold text-white">
-                  {index + 1}
-                </span>
-                <span>{step}</span>
-              </li>
-            ))}
+            {review.study_plan.map((rawStep, index) => {
+              const step = typeof rawStep === 'string' ? { action: rawStep } : rawStep
+              const refs = step.source_refs ?? []
+              const isMissing = step.source_status === 'missing'
+              return (
+                <li
+                  key={`${index}-${step.action}`}
+                  className="flex gap-3 border-t border-zinc-100 pt-2.5 first:border-0 first:pt-0"
+                >
+                  <span className="flex size-6 shrink-0 items-center justify-center rounded-lg bg-emerald-600 text-xs font-semibold text-white">
+                    {index + 1}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {step.topic && (
+                        <span className="rounded-md bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700">
+                          {step.topic}
+                        </span>
+                      )}
+                      {refs.length > 0 && (
+                        <span
+                          className={`rounded-md px-2 py-0.5 text-xs font-medium ${
+                            isMissing
+                              ? 'bg-amber-100 text-amber-800'
+                              : 'bg-emerald-50 text-emerald-700'
+                          }`}
+                        >
+                          {isMissing ? '原文待补充' : '原文依据'}
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-1.5 text-sm leading-6 text-zinc-700">{step.action}</p>
+                    {refs.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {refs.map((ref, refIndex) => {
+                          const label = `《${ref.title}》`
+                          return ref.url ? (
+                            <a
+                              key={`${ref.title}-${refIndex}`}
+                              href={ref.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex min-w-0 items-center gap-1 rounded-md bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700 transition hover:text-emerald-700"
+                            >
+                              <span className="truncate">{label}</span>
+                              <ArrowRight className="size-3 shrink-0" aria-hidden="true" />
+                            </a>
+                          ) : (
+                            <span
+                              key={`${ref.title}-${refIndex}`}
+                              className="inline-flex min-w-0 items-center rounded-md bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700"
+                            >
+                              <span className="truncate">{label}</span>
+                            </span>
+                          )
+                        })}
+                      </div>
+                    )}
+                    {isMissing && step.source_note && (
+                      <p className="mt-1.5 text-xs leading-5 text-amber-800">{step.source_note}</p>
+                    )}
+                  </div>
+                </li>
+              )
+            })}
           </ol>
           {review.encouragement && (
             <p className="mt-4 border-t border-zinc-100 pt-3 text-sm text-zinc-600">

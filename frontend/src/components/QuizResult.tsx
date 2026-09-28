@@ -217,6 +217,9 @@ export function QuizResult({
 
             <div className="mt-3">
               <p className="text-xs font-semibold text-zinc-700">下一步重点</p>
+              {guide.focus_scope_note && (
+                <p className="mt-1 text-xs leading-5 text-zinc-500">{guide.focus_scope_note}</p>
+              )}
               {guide.focus_topics.length > 0 ? (
                 <ul className="mt-1.5 space-y-2">
                   {guide.focus_topics.slice(0, 5).map((topic) => (
@@ -237,7 +240,11 @@ export function QuizResult({
                   ))}
                 </ul>
               ) : (
-                <p className="mt-1 text-xs leading-5 text-zinc-500">当前知识点掌握稳定，可以做一套混合卷保持手感。</p>
+                <p className="mt-1 text-xs leading-5 text-zinc-500">
+                  {guide.focus_scope_note
+                    ? "本卷未发现新的薄弱知识点，建议按下一套建议做间隔复习。"
+                    : "当前知识点掌握稳定，可以做一套混合卷保持手感。"}
+                </p>
               )}
             </div>
 

@@ -1477,6 +1477,7 @@ def generate_mistake_paper(
     attempt_id: str = "",
 ) -> dict:
     """按本次错题或累计错题的知识点重新生成变形题。"""
+    source_attempt_id = attempt_id or (_latest_attempt_id() if scope == "current" else "")
     if scope == "current":
         topics = _current_mistake_topics(attempt_id, limit)
     else:
@@ -1490,7 +1491,7 @@ def generate_mistake_paper(
     total = sum(counts.values())
     if total > MAX_QUESTIONS:
         counts["judge"] = max(0, MAX_QUESTIONS - counts["single"] - counts["multiple"])
-    return generate_paper(
+    paper = generate_paper(
         topics,
         doc_ids,
         single=counts["single"],
@@ -1499,6 +1500,13 @@ def generate_mistake_paper(
         difficulty=difficulty,
         focus_weak=True,
     )
+    paper["generation_context"] = {
+        "kind": "mistake_redo",
+        "scope": scope,
+        "source_attempt_id": source_attempt_id,
+    }
+    _write_json(PAPERS_DIR / f"{paper['paper_id']}.json", paper)
+    return paper
 
 
 def get_paper(paper_id: str, include_answers: bool = False) -> dict:
@@ -1616,6 +1624,79 @@ def _correct_types(stat: dict) -> list[str]:
         for qtype in VALID_TYPES
         if stat.get("by_type", {}).get(qtype, {}).get("correct", 0) > 0
     ]
+
+
+def _graded_type_stats(graded: list[dict]) -> list[dict]:
+    """统计当前答卷的题型表现，不混入历史掌握度。"""
+    stats = {qtype: {"total": 0, "correct": 0} for qtype in VALID_TYPES}
+    for item in graded:
+        qtype = str(item.get("type") or "").strip().lower()
+        if qtype not in stats:
+            continue
+        stats[qtype]["total"] += 1
+        stats[qtype]["correct"] += 1 if item.get("is_correct") else 0
+    return [
+        {
+            "type": qtype,
+            "label": TYPE_LABELS[qtype],
+            "total": stats[qtype]["total"],
+            "correct": stats[qtype]["correct"],
+            "accuracy": _accuracy(stats[qtype]["correct"], stats[qtype]["total"]),
+        }
+        for qtype in VALID_TYPES
+    ]
+
+
+def _current_focus_entry(topic: str, items: list[dict], catalog: dict | None = None) -> dict:
+    """错题变形卷提交后，只按本卷表现生成重点复习项。"""
+    module = _topic_module(topic, catalog or _topic_catalog())
+    by_type = {qtype: {"total": 0, "correct": 0} for qtype in VALID_TYPES}
+    wrong_types: list[str] = []
+    total = 0
+    correct = 0
+    for item in items:
+        qtype = str(item.get("type") or "").strip().lower()
+        if qtype not in by_type:
+            continue
+        is_correct = bool(item.get("is_correct"))
+        by_type[qtype]["total"] += 1
+        by_type[qtype]["correct"] += 1 if is_correct else 0
+        total += 1
+        correct += 1 if is_correct else 0
+        if not is_correct and qtype not in wrong_types:
+            wrong_types.append(qtype)
+
+    entry = _topic_entry(
+        topic,
+        {"total": total, "correct": correct, "streak": 0, "by_type": by_type},
+        module,
+    )
+    wrong_labels = [TYPE_LABELS[qtype] for qtype in wrong_types]
+    reasons = ["本卷有答错题目"]
+    if total < 3:
+        reasons.append("本卷样本不足 3 题")
+    elif entry["accuracy"] < 0.6:
+        reasons.append("本卷正确率低于 60%")
+    elif entry["accuracy"] < 0.8:
+        reasons.append("本卷正确率低于 80%")
+
+    if entry["total"] >= 2 and not entry["cross_type_verified"]:
+        passed = [TYPE_LABELS[qtype] for qtype in entry["verified_types"]]
+        reasons.append(
+            f"本卷仅通过 {'、'.join(passed) if passed else '无'} 验证，建议继续换题型确认"
+        )
+
+    if wrong_types:
+        recommended = (
+            f"先看本卷解析，优先重练{'、'.join(wrong_labels)}；"
+            "理解后再用已答对题型做一次间隔验证"
+        )
+    else:
+        recommended = "本卷未暴露该知识点错误，可作为间隔复习项"
+    entry["reasons"] = reasons
+    entry["missing_types"] = wrong_types
+    entry["recommended_action"] = recommended
+    return entry
 
 
 def _topic_entry(topic: str, stat: dict, module: str = "") -> dict:
@@ -1812,6 +1893,11 @@ def _next_paper_suggestion(focus_topics: list[dict], type_stats: list[dict]) -> 
 
 def _build_learning_guide(graded: list[dict] | None = None, paper: dict | None = None) -> dict:
     graded = graded or []
+    generation_context = paper.get("generation_context") if paper else None
+    is_mistake_redo = (
+        isinstance(generation_context, dict)
+        and generation_context.get("kind") == "mistake_redo"
+    )
     mastery = _ensure_mastery_schema()
     catalog = _topic_catalog()
     mistakes = list_mistakes(limit=10_000)
@@ -1822,6 +1908,69 @@ def _build_learning_guide(graded: list[dict] | None = None, paper: dict | None =
         if not item.get("is_correct")
     }
     current_topics = list(dict.fromkeys(str(item.get("topic") or "未分类") for item in graded))
+
+    if is_mistake_redo:
+        items_by_topic: dict[str, list[dict]] = {}
+        for item in graded:
+            items_by_topic.setdefault(str(item.get("topic") or "未分类"), []).append(item)
+        focus_topics = [
+            _current_focus_entry(topic, items_by_topic[topic], catalog)
+            for topic in current_topics
+            if topic in wrong_topics and topic in items_by_topic
+        ]
+        focus_topics.sort(key=lambda item: (item["accuracy"], -item["total"]))
+        type_stats = _graded_type_stats(graded)
+
+        suggestion_topics = focus_topics
+        if not suggestion_topics:
+            suggestion_topics = [
+                _current_focus_entry(topic, items_by_topic[topic], catalog)
+                for topic in current_topics
+                if topic in items_by_topic
+            ]
+        next_paper = _next_paper_suggestion(suggestion_topics, type_stats)
+        if not wrong_topics:
+            next_paper["reason"] = "本卷变形题已全部答对，下一套建议围绕本卷知识点做间隔复习。"
+
+        module_stats = _module_stats(mastery, catalog, active_mistake_topics)
+        all_entries = [
+            _topic_entry(topic, stat, _topic_module(topic, catalog))
+            for topic, stat in mastery.items()
+        ]
+        mastered_topics = [entry for entry in all_entries if _is_mastered_topic(entry)]
+        mastered_topics.sort(key=lambda item: (item["topic"] not in current_topics, -item["total"]))
+        answered_total = sum(item["total"] for item in all_entries)
+        correct_total = sum(item["correct"] for item in all_entries)
+        overall_accuracy = _accuracy(correct_total, answered_total)
+        long_term_type_stats = _aggregate_type_stats(mastery)
+        weak_type_stats = [
+            item for item in long_term_type_stats
+            if item["total"] == 0 or item["accuracy"] < 0.8
+        ]
+        interview_ready = (
+            answered_total >= 20
+            and overall_accuracy >= 0.85
+            and not active_mistake_topics
+            and not weak_type_stats
+            and len(mastered_topics) >= 5
+            and len(mastered_topics) >= len(all_entries) * 0.7
+        )
+        summary = (
+            f"本卷变形练习发现 {len(focus_topics)} 个知识点需要继续巩固；"
+            "右侧就绪度仍按累计学习数据计算。"
+        )
+        return {
+            "summary": summary,
+            "type_stats": type_stats,
+            "module_stats": module_stats,
+            "mastered_topics": mastered_topics[:12],
+            "focus_topics": focus_topics[:8],
+            "next_paper": next_paper,
+            "interview_ready": interview_ready,
+            "interview_reasons": [],
+            "scope_note": "该就绪度只按已练习知识点计算，不会锁定模拟面试入口。",
+            "focus_scope_note": "下一步重点仅统计本卷错题；就绪度仍使用累计掌握度。",
+        }
 
     all_entries = [
         _topic_entry(topic, stat, _topic_module(topic, catalog))

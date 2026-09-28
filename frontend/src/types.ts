@@ -455,6 +455,7 @@ export interface QuizLearningGuide {
   interview_ready: boolean
   interview_reasons: string[]
   scope_note: string
+  focus_scope_note?: string
 }
 
 export interface QuizReview {

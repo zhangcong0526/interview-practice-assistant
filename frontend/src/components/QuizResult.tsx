@@ -568,7 +568,7 @@ export function QuizResult({
                       ? '你的选择 · 正确'
                       : '漏选'
                     : isPicked
-                      ? '误选'
+                      ? '错误'
                       : ''
                   return (
                     <li

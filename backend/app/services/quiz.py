@@ -1622,6 +1622,59 @@ def _review_focus_items(graded: list[dict], topic_stats: dict[str, dict]) -> lis
     return focus
 
 
+def _build_review_context(graded: list[dict]) -> str:
+    """给分批复习模型补充低成本的整卷概览，避免只见局部错题。"""
+    total = len(graded)
+    if not total:
+        return ""
+
+    correct = sum(1 for item in graded if item.get("is_correct"))
+    unanswered = sum(1 for item in graded if not (item.get("user_answer") or []))
+    wrong = total - correct
+    by_type: dict[str, list[int]] = {
+        qtype: [0, 0] for qtype in VALID_TYPES
+    }
+    topic_stats: dict[str, list[int]] = {}
+    for item in graded:
+        qtype = item.get("type")
+        topic = str(item.get("topic") or "未分类")
+        if qtype in by_type:
+            by_type[qtype][1] += 1
+            if item.get("is_correct"):
+                by_type[qtype][0] += 1
+        stat = topic_stats.setdefault(topic, [0, 0])
+        stat[1] += 1
+        if item.get("is_correct"):
+            stat[0] += 1
+
+    type_lines = [
+        f"{TYPE_LABELS[qtype]} {values[0]}/{values[1]}"
+        for qtype, values in by_type.items()
+        if values[1]
+    ]
+    solid_topics = [
+        f"{topic}（{values[0]}题）"
+        for topic, values in topic_stats.items()
+        if values[0] == values[1]
+    ]
+
+    lines = [
+        f"本卷共 {total} 题：答对 {correct}，答错 {wrong}，未作答 {unanswered}。"
+    ]
+    if type_lines:
+        lines.append("题型表现：" + "；".join(type_lines) + "。")
+    lines.append(
+        "完全答对的知识点："
+        + ("、".join(solid_topics) if solid_topics else "无")
+        + "。"
+    )
+    lines.append(
+        "系统会分批逐题分析答错或历史正确率偏低的题；这里只补充整卷概览，"
+        "总结整体表现时可使用这些信息，不要误以为分批题目就是全部试卷。"
+    )
+    return "【整体试卷上下文】\n" + "\n".join(lines)
+
+
 def _filter_topic_history(history: list[dict], topics: set[str] | None) -> list[dict]:
     if topics is None:
         return history
@@ -1746,6 +1799,7 @@ def _generate_review(
     topic_stats: dict[str, dict],
 ) -> dict:
     batches = _build_review_batches(graded, topic_stats, review_sources, history)
+    overall_context = _build_review_context(graded)
     results: list[dict] = []
     errors: list[str] = []
 
@@ -1758,6 +1812,7 @@ def _generate_review(
                 accuracy,
                 batch["history"],
                 _format_review_sources(batch["sources"]),
+                overall_context,
             ),
             max_tokens=2400,
             timeout=REVIEW_TIMEOUT_SECONDS,

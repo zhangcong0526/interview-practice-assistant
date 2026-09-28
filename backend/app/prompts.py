@@ -416,8 +416,11 @@ def build_review_user(
     accuracy: float,
     topic_history: list[dict] | None = None,
     review_sources: str = "",
+    overall_context: str = "",
 ) -> str:
     lines = [f"【本次成绩】\n得分 {score} 分，正确率 {round(accuracy * 100)}%"]
+    if overall_context.strip():
+        lines.append(overall_context.strip())
 
     detail: list[str] = []
     for index, item in enumerate(graded, start=1):

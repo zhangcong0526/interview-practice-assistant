@@ -37,6 +37,10 @@ MAX_REVIEW_SOURCE_CHARS = 3_600
 MAX_QUESTIONS = 30
 QUIZ_LLM_BATCH_SIZE = 8
 QUIZ_FAST_SINGLE_CALL_LIMIT = 8
+REVIEW_BATCH_SIZE = 6
+REVIEW_MAX_CONCURRENCY = 2
+REVIEW_TIMEOUT_SECONDS = 75.0
+MASTERY_LEVEL_ORDER = {"beginner": 0, "developing": 1, "proficient": 2, "mastered": 3}
 # 连续两次答对即视为该知识点已回稳，可以移出错题本。
 MISTAKE_CLEAR_STREAK = 2
 MASTERY_VERSION = 3
@@ -1603,6 +1607,184 @@ def _build_learning_guide(graded: list[dict] | None = None, paper: dict | None =
     }
 
 
+def _review_focus_items(graded: list[dict], topic_stats: dict[str, dict]) -> list[dict]:
+    """只把答错、未作答或历史正确率偏低的题送入复习模型。"""
+    focus: list[dict] = []
+    for item in graded:
+        topic = str(item.get("topic") or "未分类")
+        stat = topic_stats.get(topic) or {}
+        try:
+            accuracy = float(stat.get("correct", 0)) / max(1, int(stat.get("total", 0)))
+        except (TypeError, ValueError):
+            accuracy = 1.0
+        if not item.get("is_correct") or accuracy < 0.8:
+            focus.append(item)
+    return focus
+
+
+def _filter_topic_history(history: list[dict], topics: set[str] | None) -> list[dict]:
+    if topics is None:
+        return history
+    return [item for item in history if str(item.get("topic") or "未分类") in topics]
+
+
+def _filter_review_sources(
+    review_sources: dict[str, list[dict]],
+    topics: set[str] | None,
+) -> dict[str, list[dict]]:
+    if topics is None:
+        return review_sources
+    return {topic: refs for topic, refs in review_sources.items() if topic in topics}
+
+
+def _build_review_batches(
+    graded: list[dict],
+    topic_stats: dict[str, dict],
+    review_sources: dict[str, list[dict]],
+    history: list[dict],
+) -> list[dict]:
+    """把弱题分成小批次，避免一次复习调用同时承载全部逐题结果和原文。"""
+    focus = _review_focus_items(graded, topic_stats)
+    if len(focus) <= REVIEW_BATCH_SIZE:
+        return [
+            {
+                "items": focus,
+                "history": history,
+                "sources": review_sources,
+            }
+        ]
+
+    batches: list[dict] = []
+    for offset in range(0, len(focus), REVIEW_BATCH_SIZE):
+        items = focus[offset : offset + REVIEW_BATCH_SIZE]
+        topics = {str(item.get("topic") or "未分类") for item in items}
+        batches.append(
+            {
+                "items": items,
+                "history": _filter_topic_history(history, topics),
+                "sources": _filter_review_sources(review_sources, topics),
+            }
+        )
+    return batches
+
+
+def _merge_review_part(left: dict, right: dict) -> dict:
+    def richness(item: dict) -> int:
+        return (
+            len(str(item.get("diagnosis") or ""))
+            + sum(len(str(value)) for value in item.get("study_points") or [])
+            + sum(len(str(value)) for value in item.get("next_actions") or [])
+        )
+
+    return max([left, right], key=lambda item: (richness(item), bool(item.get("topic"))))
+
+
+def _merge_reviews(results: list[dict]) -> dict:
+    """合并分批复习结果；相同知识点保留信息最完整的一条。"""
+    merged = {
+        "summary": "",
+        "mastery_level": "",
+        "can_advance": True,
+        "advance_reason": "",
+        "weak_topics": [],
+        "study_plan": [],
+        "encouragement": "",
+    }
+    weak_by_key: dict[str, dict] = {}
+    plan_by_action: dict[str, dict] = {}
+    levels: list[str] = []
+
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        for field in ("summary", "advance_reason", "encouragement"):
+            if not merged[field] and str(result.get(field) or "").strip():
+                merged[field] = str(result[field]).strip()
+
+        level = str(result.get("mastery_level") or "").strip().lower()
+        if level in MASTERY_LEVEL_ORDER:
+            levels.append(level)
+        merged["can_advance"] = merged["can_advance"] and bool(result.get("can_advance"))
+
+        for item in result.get("weak_topics") or []:
+            if not isinstance(item, dict):
+                continue
+            topic = str(item.get("topic") or "").strip()
+            if not topic:
+                continue
+            key = _normalise_topic_key(topic)
+            current = weak_by_key.get(key)
+            weak_by_key[key] = _merge_review_part(current or item, item)
+
+        for item in result.get("study_plan") or []:
+            if not isinstance(item, dict):
+                continue
+            action = str(
+                item.get("action")
+                or item.get("step")
+                or item.get("description")
+                or ""
+            ).strip()
+            if not action:
+                continue
+            key = _normalise_topic_key(action)
+            plan_by_action.setdefault(key, item)
+
+    merged["weak_topics"] = list(weak_by_key.values())
+    merged["study_plan"] = list(plan_by_action.values())
+    if levels:
+        merged["mastery_level"] = min(levels, key=lambda level: MASTERY_LEVEL_ORDER[level])
+    return merged
+
+
+def _generate_review(
+    graded: list[dict],
+    score: float,
+    accuracy: float,
+    history: list[dict],
+    review_sources: dict[str, list[dict]],
+    topic_stats: dict[str, dict],
+) -> dict:
+    batches = _build_review_batches(graded, topic_stats, review_sources, history)
+    results: list[dict] = []
+    errors: list[str] = []
+
+    def call(batch: dict) -> dict:
+        return llm_service.chat_json(
+            prompts.REVIEW_SYSTEM,
+            prompts.build_review_user(
+                batch["items"],
+                score,
+                accuracy,
+                batch["history"],
+                _format_review_sources(batch["sources"]),
+            ),
+            max_tokens=2400,
+            timeout=REVIEW_TIMEOUT_SECONDS,
+        )
+
+    if len(batches) == 1:
+        return call(batches[0])
+
+    with ThreadPoolExecutor(max_workers=REVIEW_MAX_CONCURRENCY) as executor:
+        futures = {executor.submit(call, batch): index for index, batch in enumerate(batches)}
+        for future in as_completed(futures):
+            try:
+                results.append(future.result())
+            except llm_service.LlmError as exc:
+                errors.append(str(exc))
+
+    if not results:
+        raise llm_service.LlmError(errors[0] if errors else "复习建议生成失败。")
+
+    merged = _merge_reviews(results)
+    if errors:
+        merged["review_error"] = (
+            f"部分复习建议批次失败，已保留成功部分：{errors[0]}"
+        )
+    return merged
+
+
 def grade(paper_id: str, answers: dict[str, list[str]]) -> dict:
     paper = get_paper(paper_id, include_answers=True)
     questions = paper.get("questions") or []
@@ -1663,16 +1845,7 @@ def grade(paper_id: str, answers: dict[str, list[str]]) -> dict:
     ]
 
     try:
-        review = llm_service.chat_json(
-            prompts.REVIEW_SYSTEM,
-            prompts.build_review_user(
-                graded,
-                score,
-                accuracy,
-                history,
-                _format_review_sources(review_sources),
-            ),
-        )
+        review = _generate_review(graded, score, accuracy, history, review_sources, topic_stats)
     except llm_service.LlmError as exc:
         # 判分是本地算的，复习指引失败不应该让用户丢失成绩。
         review = {

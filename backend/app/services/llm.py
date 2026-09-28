@@ -72,12 +72,13 @@ def chat_json(
     *,
     provider: str | None = None,
     model: str | None = None,
+    timeout: float | None = None,
 ) -> dict:
     api_key, base_url, resolved_model = _provider_config(provider)
     client = OpenAI(
         api_key=api_key,
         base_url=base_url,
-        timeout=CHAT_TIMEOUT_SECONDS,
+        timeout=timeout or CHAT_TIMEOUT_SECONDS,
         max_retries=0,
     )
     try:

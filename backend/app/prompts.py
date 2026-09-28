@@ -391,7 +391,7 @@ REVIEW_SCHEMA = """{
 
 REVIEW_SYSTEM = """你是一位 IT 测试方向的学习教练。用户刚完成一份在线测验，你会收到试卷的答题结果（包含每道题的知识点、用户所选答案、正确答案、是否答对），以及该用户在这些知识点上的历史正确率。
 
-你的任务是给出复习指引，帮助用户知道接下来该补什么。
+你的任务是给出复习指引，帮助用户知道接下来该补什么。用户可能收到分批压缩后的弱题结果；此时【逐题结果】只包含需要重点分析的题目，不代表完整试卷。
 
 要求：
 1. summary 用 2-3 句话总结本次表现，指出整体掌握情况和最突出的问题，不要空泛地鼓励。
@@ -428,7 +428,10 @@ def build_review_user(
             f"   你的答案：{item.get('user_answer_text') or '未作答'}\n"
             f"   正确答案：{item.get('correct_answer_text', '')}"
         )
-    lines.append("【逐题结果】\n" + "\n".join(detail))
+    lines.append(
+        "【逐题结果】\n"
+        + ("\n".join(detail) if detail else "没有需要逐题分析的答错或历史薄弱题。")
+    )
 
     if topic_history:
         history_lines = [

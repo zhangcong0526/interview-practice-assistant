@@ -118,26 +118,6 @@ def chat_json(
         timeout,
     )
     start_ts = time.perf_counter()
-    try:
-        resp = _completion(
-            client,
-            model=model or resolved_model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            temperature=0.3,
-            max_tokens=max_tokens,
-            json_mode=True,
-        )
-    except Exception as exc:
-        raise LlmError(f"调用 LLM 失败: {exc}") from exc
-    choice = resp.choices[0]
-    content = choice.message.content or ""
-    if choice.finish_reason == "length":
-        raise LlmError(
-            "模型输出达到长度上限被截断，返回的 JSON 不完整。请缩短输入内容后重试。"
-        )
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": user},
@@ -175,8 +155,9 @@ def chat_json(
             return _parse_json(content_iter)
         except LlmError as exc:
             last_error = exc
-            # 第一次失败时追加一条只输出严格 JSON 的指令再试一次。
+            # 把失败输出也交给模型，再追加一条只输出严格 JSON 的指令。
             messages = messages + [
+                {"role": "assistant", "content": content_iter},
                 {
                     "role": "user",
                     "content": (

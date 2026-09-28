@@ -39,10 +39,11 @@ QUIZ_LLM_BATCH_SIZE = 8
 QUIZ_FAST_SINGLE_CALL_LIMIT = 8
 REVIEW_BATCH_SIZE = 4
 REVIEW_MAX_CONCURRENCY = 2
-REVIEW_TIMEOUT_SECONDS = 60.0
+REVIEW_LLM_ITEM_LIMIT = 8
+REVIEW_TIMEOUT_SECONDS = 40.0
 REVIEW_FALLBACK_BATCH_SIZE = 2
 REVIEW_FALLBACK_CONCURRENCY = 3
-REVIEW_FALLBACK_TIMEOUT_SECONDS = 35.0
+REVIEW_FALLBACK_TIMEOUT_SECONDS = 20.0
 MASTERY_LEVEL_ORDER = {"beginner": 0, "developing": 1, "proficient": 2, "mastered": 3}
 # 连续两次答对即视为该知识点已回稳，可以移出错题本。
 MISTAKE_CLEAR_STREAK = 2
@@ -1701,6 +1702,7 @@ def _build_review_batches(
 ) -> list[dict]:
     """把弱题分成小批次，避免一次复习调用同时承载全部逐题结果和原文。"""
     focus = _review_focus_items(graded, topic_stats)
+    focus = _prioritise_review_items(focus, topic_stats)[:REVIEW_LLM_ITEM_LIMIT]
     if len(focus) <= REVIEW_BATCH_SIZE:
         return [
             {
@@ -1722,6 +1724,28 @@ def _build_review_batches(
             }
         )
     return batches
+
+
+def _prioritise_review_items(
+    focus: list[dict],
+    topic_stats: dict[str, dict],
+) -> list[dict]:
+    """错题/未作答优先，其次按历史正确率从低到高排队。"""
+
+    def sort_key(item: dict):
+        stat = topic_stats.get(str(item.get("topic") or "未分类")) or {}
+        try:
+            accuracy = float(stat.get("correct", 0)) / max(1, int(stat.get("total", 0)))
+        except (TypeError, ValueError):
+            accuracy = 1.0
+        unanswered = not (item.get("user_answer") or [])
+        return (
+            bool(item.get("is_correct")),
+            bool(unanswered),
+            accuracy,
+        )
+
+    return sorted(focus, key=sort_key)
 
 
 def _merge_review_part(left: dict, right: dict) -> dict:
@@ -1828,7 +1852,11 @@ def _generate_review(
         except llm_service.LlmError as exc:
             fallback_batches = _split_review_batches(batches[0])
             if len(fallback_batches) <= 1:
-                raise
+                local = _build_local_review(
+                    graded, score, accuracy, review_sources, topic_stats
+                )
+                local["review_error"] = f"模型调用超时，已生成基础复习建议：{exc}"
+                return local
             try:
                 fallback_results = _run_review_calls(
                     fallback_batches,
@@ -1841,9 +1869,16 @@ def _generate_review(
                 )
                 merged = _merge_reviews(fallback_results)
                 merged["review_error"] = f"完整复习建议超时，已保留拆分后的部分建议：{exc}"
-                return merged
+                local = _build_local_review(
+                    graded, score, accuracy, review_sources, topic_stats
+                )
+                return _merge_reviews([merged, local])
             except llm_service.LlmError:
-                raise exc from None
+                local = _build_local_review(
+                    graded, score, accuracy, review_sources, topic_stats
+                )
+                local["review_error"] = f"模型调用超时，已生成基础复习建议：{exc}"
+                return local
 
     results: list[dict] = []
     errors: list[str] = []
@@ -1878,14 +1913,27 @@ def _generate_review(
             errors = []
         except llm_service.LlmError as fallback_exc:
             errors = [str(fallback_exc)]
+            results.append(
+                _build_local_review(graded, score, accuracy, review_sources, topic_stats)
+            )
 
     if not results:
         raise llm_service.LlmError(errors[0] if errors else "复习建议生成失败。")
 
     merged = _merge_reviews(results)
+    # 模型只深度分析优先级最高的弱题；如果本次弱题超过模型输入上限，
+    # 把剩余题目合并进本地覆盖层，避免这些错题在复习指引里被遗漏。
+    focus_count = len(_review_focus_items(graded, topic_stats))
+    if focus_count > REVIEW_LLM_ITEM_LIMIT:
+        coverage = _build_local_review(
+            graded, score, accuracy, review_sources, topic_stats
+        )
+        coverage.pop("review_error", None)
+        merged = _merge_reviews([merged, coverage])
+
     if errors:
         merged["review_error"] = (
-            f"部分复习建议批次失败，已保留成功部分：{errors[0]}"
+            f"部分深度分析失败，已用基础复习建议覆盖剩余弱题：{errors[0]}"
         )
     return merged
 
@@ -1900,6 +1948,90 @@ def _split_review_batches(batch: dict) -> list[dict]:
         }
         for offset in range(0, len(items), REVIEW_FALLBACK_BATCH_SIZE)
     ]
+
+
+def _build_local_review(
+    graded: list[dict],
+    score: float,
+    accuracy: float,
+    review_sources: dict[str, list[dict]],
+    topic_stats: dict[str, dict],
+) -> dict:
+    """LLM 超时时用题目解析和来源片段生成基础复习建议。"""
+    focus = _prioritise_review_items(
+        _review_focus_items(graded, topic_stats),
+        topic_stats,
+    )
+    by_topic: dict[str, list[dict]] = {}
+    for item in focus:
+        topic = str(item.get("topic") or "未分类").strip() or "未分类"
+        by_topic.setdefault(topic, []).append(item)
+
+    weak_topics: list[dict] = []
+    study_plan: list[dict] = []
+    for topic, items in by_topic.items():
+        topic_label = TYPE_LABELS.get(items[0].get("type"), "题目") if items else "题目"
+        first = items[0]
+        wrong_options = "、".join(first.get("user_answer") or [])
+        correct_options = "、".join(first.get("correct_answer") or [])
+        comparison = (
+            f"示例题里你选了「{wrong_options}」，正确答案是「{correct_options}」。"
+            if wrong_options
+            else f"示例题未作答，正确答案是「{correct_options}」。"
+        )
+        explanation = str(first.get("explanation") or "").strip()
+        diagnosis = (
+            f"这个知识点在本次有 {len(items)} 道弱题。{comparison}"
+            + (f"题目解析提到：{explanation}" if explanation else "先用这道题的答案差异回看解析。")
+        )
+        weak_topics.append(
+            {
+                "topic": topic,
+                "diagnosis": diagnosis,
+                "plain_summary": (
+                    f"先把「{topic}」拆成：题目问了什么、正确答案为什么成立、你选的答案为什么不够完整。"
+                ),
+                "analogy": "",
+                "flow_steps": [
+                    "读题干，找出它实际考查的动作或判断标准。",
+                    "对照正确答案和题目解析，补齐关键条件。",
+                    "用自己的话复述一遍，再换题型重做验证。",
+                ],
+                "study_points": [
+                    f"记住这组差异：你选「{wrong_options or '未作答'}」，正确是「{correct_options}」。",
+                    explanation or "回到原文核对这道题对应的标准做法。",
+                ],
+                "next_actions": [
+                    f"重读「{topic}」对应的原文依据。",
+                    f"用不同{topic_label}换场景重做 {min(3, len(items) + 1)} 题。",
+                    "复述关键步骤后再检查是否还依赖答案提示。",
+                ],
+            }
+        )
+        study_plan.append(
+            {
+                "topic": topic,
+                "action": f"先用本地基础建议理解「{topic}」，稍后重试复习分析，再换题型巩固。",
+            }
+        )
+
+    if focus:
+        summary = (
+            f"本次得分 {score} 分，正确率 {round(accuracy * 100)}%。"
+            f"已用本地兜底覆盖 {len(focus)} 道弱题、{len(by_topic)} 个知识点。"
+        )
+    else:
+        summary = f"本次得分 {score} 分，正确率 {round(accuracy * 100)}%，未发现明显弱题。"
+
+    return {
+        "summary": summary,
+        "mastery_level": _local_mastery_level(accuracy),
+        "can_advance": accuracy >= 0.85,
+        "advance_reason": "本地兜底建议只能保证基础覆盖，达到标准后再进入下一板块。",
+        "weak_topics": weak_topics,
+        "study_plan": study_plan,
+        "encouragement": "成绩已经保存；先用基础建议补齐错题，模型恢复后再拿完整分析。",
+    }
 
 
 def _run_review_calls(
@@ -1999,17 +2131,9 @@ def grade(paper_id: str, answers: dict[str, list[str]]) -> dict:
     try:
         review = _generate_review(graded, score, accuracy, history, review_sources, topic_stats)
     except llm_service.LlmError as exc:
-        # 判分是本地算的，复习指引失败不应该让用户丢失成绩。
-        review = {
-            "summary": f"本次得分 {score} 分，正确率 {round(accuracy * 100)}%。",
-            "mastery_level": _local_mastery_level(accuracy),
-            "can_advance": accuracy >= 0.85,
-            "advance_reason": "",
-            "weak_topics": [],
-            "study_plan": [],
-            "encouragement": "",
-            "review_error": f"复习建议生成失败：{exc}",
-        }
+        # 判分是本地算的；模型不可用时复习指引降级为基础建议，成绩不丢。
+        review = _build_local_review(graded, score, accuracy, review_sources, topic_stats)
+        review["review_error"] = f"模型调用超时，已生成基础复习建议：{exc}"
 
     review = _normalise_review(review, accuracy, review_sources)
     review["learning_guide"] = _build_learning_guide(graded, paper)

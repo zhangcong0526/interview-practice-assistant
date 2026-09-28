@@ -5,11 +5,13 @@
 
 import json
 import re
+import logging
 import shutil
 import time
 import uuid
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from ..config import settings
@@ -41,6 +43,20 @@ QUIZ_LLM_BATCH_SIZE = 8
 QUIZ_FAST_SINGLE_CALL_LIMIT = 8
 MIN_FALLBACK_EXPLANATION_CHARS = 24
 MIN_STRICT_EXPLANATION_CHARS = 60
+
+LOG_DIR = Path(__file__).resolve().parents[2] / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+quiz_logger = logging.getLogger("interview_assistant.quiz")
+if not quiz_logger.handlers:
+    _quiz_handler = RotatingFileHandler(
+        LOG_DIR / "quiz.log",
+        maxBytes=2 * 1024 * 1024,
+        backupCount=3,
+        encoding="utf-8",
+    )
+    _quiz_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    quiz_logger.addHandler(_quiz_handler)
+    quiz_logger.setLevel(logging.INFO)
 
 
 def _minimax_provider() -> bool:
@@ -1002,6 +1018,44 @@ def _has_unreliable_explanation(explanation: str) -> bool:
     return any(re.search(pattern, text) for pattern in patterns)
 
 
+def _question_reject_reason(item: dict) -> str:
+    """诊断用：返回一道原始题目无法通过校验的首个原因，正常路径不依赖它。"""
+    qtype = str(item.get("type") or "").strip().lower()
+    if qtype not in VALID_TYPES:
+        return "bad_type"
+    if not str(item.get("stem") or "").strip():
+        return "empty_stem"
+    options = item.get("options") or []
+    answers = item.get("answer") or []
+    if len(options) < 2:
+        return "few_options"
+    valid_keys = {
+        str(option.get("key") or "").strip().upper()
+        for option in options
+        if isinstance(option, dict)
+    }
+    if not answers:
+        return "empty_answer"
+    if any(str(answer).strip().upper() not in valid_keys for answer in answers):
+        return "answer_key_unknown"
+    if len(answers) == len(options):
+        return "answer_all_options"
+    if qtype == "judge" and len(answers) != 1:
+        return "judge_answer_not_single"
+    if qtype == "single" and len(answers) != 1:
+        return "single_answer_not_single"
+    if qtype == "multiple" and len(answers) < 2:
+        return "multiple_downgrade"
+    explanation = str(item.get("explanation") or "").strip()
+    if _has_unreliable_explanation(explanation):
+        return "unreliable_explanation"
+    if len(explanation) < MIN_FALLBACK_EXPLANATION_CHARS:
+        return "explanation_too_short"
+    if len(explanation) < MIN_STRICT_EXPLANATION_CHARS:
+        return "short_explanation_recoverable"
+    return "ok"
+
+
 def _normalise_question(item: dict, index: int, topic_catalog: dict | None = None) -> dict | None:
     return _normalise_question_with_mode(item, index, topic_catalog, strict=True)
 
@@ -1140,6 +1194,11 @@ def generate_paper(
                 question = _normalise_question(item, len(normalised) + 1, topic_catalog)
                 if question:
                     normalised.append(question)
+        quiz_logger.info(
+            "paper normalise raw=%d strict_ok=%d",
+            len(items),
+            len(normalised),
+        )
         return normalised
 
     try:
@@ -1207,6 +1266,14 @@ def generate_paper(
         except llm_service.LlmError as exc:
             retry_error = exc
 
+    quiz_logger.info(
+        "paper plan keywords=%s total=%d initial_ok=%d deficits=%s",
+        ",".join(keywords[:5]),
+        total,
+        len(selected),
+        deficits,
+    )
+
     # 严格避重两次后仍凑不齐时，优先保证可练习；仍保留当前试卷内部去重。
     if any(deficits.values()):
         fallback_pool = _dedupe_questions(
@@ -1227,6 +1294,43 @@ def generate_paper(
             selected.extend(chosen)
             deficits[qtype] -= len(chosen)
 
+    # 随机坏批次兜底：宽松层救不回的题（答案错误、自我纠正式解析）只能靠新题，
+    # 这里再做一次定向补题；正常一次通过的卷子不会触发这一步。
+    if any(deficits.values()):
+        retry2_counts = _buffered_counts(
+            {qtype: max(0, int(deficits[qtype])) for qtype in VALID_TYPES},
+            buffer_size=2,
+        )
+        retry2_avoid = recent_stems + [item["stem"] for item in selected]
+        try:
+            retry2_raw = _request_quiz_raw(
+                material,
+                keywords,
+                retry2_counts,
+                difficulty,
+                retry2_avoid[-50:],
+                weak_topics,
+                coverage_hint,
+            )
+            retry2_candidates = normalise_raw(retry2_raw)
+            unique_questions = _dedupe_questions(
+                retry2_candidates,
+                retry2_avoid,
+                accepted=unique_questions,
+            )
+            selected_ids = {id(item) for item in selected}
+            for qtype in VALID_TYPES:
+                available = [
+                    item
+                    for item in unique_questions
+                    if item["type"] == qtype and id(item) not in selected_ids
+                ]
+                chosen = available[: deficits[qtype]]
+                selected.extend(chosen)
+                deficits[qtype] -= len(chosen)
+        except llm_service.LlmError as exc:
+            quiz_logger.warning("paper retry2 failed: %s", exc)
+
     # 严格解析门槛救回来的题仍不够时，最后把原始题目用宽松解析重新归一化。
     # 这里仍然拒绝结构错误、答案错误和模型自我纠正式的不可靠解析。
     if any(deficits.values()) or len(selected) != total:
@@ -1240,6 +1344,12 @@ def generate_paper(
             )
             if question:
                 relaxed_candidates.append(question)
+        quiz_logger.info(
+            "paper relaxed pool raw=%d recovered=%d deficits=%s",
+            len(raw_item_pool),
+            len(relaxed_candidates),
+            deficits,
+        )
         relaxed_pool = _dedupe_questions(
             relaxed_candidates,
             [],
@@ -1259,6 +1369,18 @@ def generate_paper(
             deficits[qtype] -= len(chosen)
 
     if any(deficits.values()) or len(selected) != total:
+        reject_summary = [
+            reason
+            for reason in (_question_reject_reason(item) for item in raw_item_pool)
+            if reason != "ok"
+        ][:12]
+        quiz_logger.warning(
+            "paper incomplete selected=%d/%d deficits=%s rejects=%s",
+            len(selected),
+            total,
+            deficits,
+            reject_summary,
+        )
         if retry_error is not None:
             raise QuizError(f"补充命题失败：{retry_error}") from retry_error
         raise QuizError("模型返回的有效题目不足，请稍后重试或更换关键词。")

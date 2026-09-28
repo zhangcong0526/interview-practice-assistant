@@ -39,6 +39,8 @@ MAX_REVIEW_REF_CHARS = 400
 MAX_QUESTIONS = 30
 QUIZ_LLM_BATCH_SIZE = 8
 QUIZ_FAST_SINGLE_CALL_LIMIT = 8
+MIN_FALLBACK_EXPLANATION_CHARS = 24
+MIN_STRICT_EXPLANATION_CHARS = 60
 
 
 def _minimax_provider() -> bool:
@@ -1001,6 +1003,41 @@ def _has_unreliable_explanation(explanation: str) -> bool:
 
 
 def _normalise_question(item: dict, index: int, topic_catalog: dict | None = None) -> dict | None:
+    return _normalise_question_with_mode(item, index, topic_catalog, strict=True)
+
+
+def _normalise_question_with_mode(
+    item: dict,
+    index: int,
+    topic_catalog: dict | None,
+    *,
+    strict: bool,
+) -> dict | None:
+    question = _normalise_question_core(item, index, topic_catalog)
+    if question:
+        return question
+
+    # 严格校验失败时只放宽解析长度，不放宽答案、题型和题干结构。
+    # 这层兜底仅在补题后仍不足时使用，避免模型偶尔写短解析导致整份卷子作废。
+    explanation = str(item.get("explanation") or "").strip()
+    if strict or len(explanation) < MIN_FALLBACK_EXPLANATION_CHARS:
+        return None
+    relaxed_item = dict(item)
+    relaxed_item["explanation"] = explanation
+    return _normalise_question_core(
+        relaxed_item,
+        index,
+        topic_catalog,
+        min_explanation_chars=MIN_FALLBACK_EXPLANATION_CHARS,
+    )
+
+
+def _normalise_question_core(
+    item: dict,
+    index: int,
+    topic_catalog: dict | None = None,
+    min_explanation_chars: int = MIN_STRICT_EXPLANATION_CHARS,
+) -> dict | None:
     qtype = str(item.get("type") or "").strip().lower()
     if qtype not in VALID_TYPES:
         return None
@@ -1047,7 +1084,7 @@ def _normalise_question(item: dict, index: int, topic_catalog: dict | None = Non
         difficulty = "medium"
 
     explanation = str(item.get("explanation") or "").strip()
-    if len(explanation) < 60 or _has_unreliable_explanation(explanation):
+    if len(explanation) < min_explanation_chars or _has_unreliable_explanation(explanation):
         return None
 
     return {
@@ -1090,12 +1127,15 @@ def generate_paper(
     coverage_hint = _topic_type_coverage_hint(keywords)
     recent_stems = _recent_stems(limit=80)
     raw_title = ""
+    raw_item_pool: list[dict] = []
 
     def normalise_raw(raw: dict) -> list[dict]:
         nonlocal raw_title
         raw_title = str(raw.get("title") or raw_title or "").strip()
         normalised: list[dict] = []
-        for item in raw.get("questions") or []:
+        items = raw.get("questions") or []
+        raw_item_pool.extend(item for item in items if isinstance(item, dict))
+        for item in items:
             if isinstance(item, dict):
                 question = _normalise_question(item, len(normalised) + 1, topic_catalog)
                 if question:
@@ -1181,6 +1221,37 @@ def generate_paper(
             available = [
                 item
                 for item in fallback_pool[len(selected):]
+                if item["type"] == qtype
+            ]
+            chosen = available[: deficits[qtype]]
+            selected.extend(chosen)
+            deficits[qtype] -= len(chosen)
+
+    # 严格解析门槛救回来的题仍不够时，最后把原始题目用宽松解析重新归一化。
+    # 这里仍然拒绝结构错误、答案错误和模型自我纠正式的不可靠解析。
+    if any(deficits.values()) or len(selected) != total:
+        relaxed_candidates: list[dict] = []
+        for item in raw_item_pool:
+            question = _normalise_question_with_mode(
+                item,
+                len(relaxed_candidates) + 1,
+                topic_catalog,
+                strict=False,
+            )
+            if question:
+                relaxed_candidates.append(question)
+        relaxed_pool = _dedupe_questions(
+            relaxed_candidates,
+            [],
+            accepted=list(selected),
+            recent_threshold=1.0 + 1e-9,
+        )
+        for qtype in VALID_TYPES:
+            if deficits[qtype] <= 0:
+                continue
+            available = [
+                item
+                for item in relaxed_pool[len(selected):]
                 if item["type"] == qtype
             ]
             chosen = available[: deficits[qtype]]

@@ -372,6 +372,9 @@ REVIEW_SCHEMA = """{
     {
       "topic": "",
       "diagnosis": "",
+      "plain_summary": "",
+      "analogy": "",
+      "flow_steps": [],
       "source_status": "reinforce",
       "source_note": "",
       "study_points": [],
@@ -398,13 +401,13 @@ REVIEW_SYSTEM = """你是一位 IT 测试方向的学习教练。用户刚完成
 2. mastery_level 只能是 "beginner"、"developing"、"proficient"、"mastered" 之一。判断标准：本次正确率低于 60% 为 beginner；60% 到 79% 为 developing；80% 到 89% 为 proficient；90% 及以上且没有反复错的知识点为 mastered。
 3. can_advance 表示是否可以进入下一个板块的练习。只有当本次正确率达到 85% 以上、并且没有任何知识点在历史上反复出错时，才可以设为 true。
 4. advance_reason 用一句话说明为什么可以或不可以进入下一板块，要给出具体依据（例如"多选题错 3 道，说明对 X 的边界条件还不清楚"）。
-5. weak_topics 只列出本次答错或历史正确率偏低的知识点。diagnosis 说明用户是哪里理解错了（结合他选错的选项推断误区），study_points 列出该知识点需要补的具体内容，next_actions 给出可立即执行的动作（例如"手写一遍等价类划分表并对照检查"）。
-6. 用户可能收到【知识库原文片段】。写建议时优先依据这些片段；如果某个 weak_topic 没有对应片段，或片段不足以解释错因，source_status 填 "missing"，并在 source_note 中建议用户在原文档补充什么内容。不要编造原文，也不要凭空断言文档完全没有相关内容。
-7. study_points 要用小白能听懂的顺序解释：先一句话说它是什么，再说它为什么/怎么运作，最后指出容易混淆的地方。避免只堆术语；必须给出一个具体例子或判断办法。
+5. weak_topics 只列出本次答错或历史正确率偏低的知识点。diagnosis 必须先解释“为什么这道题没做对”：结合用户答案和正确答案指出具体误区（例如误解概念、漏选分支、混淆边界、凭经验假设），再用一句话给出正确判断路径。plain_summary 用 1-2 句大白话说清这个知识点是什么、关键区别在哪里，不复制原文。analogy 只在类比能降低理解成本时给出一个生活或工程类比，并说明类比对应关系；不合适就留空。flow_steps 只有当知识点涉及流程、因果或判断分支时才输出 3-6 个短步骤；纯概念或事实型知识保持空数组。
+6. study_points 列出 2-4 条需要补的具体内容，每条用一句话重新提炼，不要原样摘抄原文。next_actions 给出 2-3 个可立即执行的动作（例如"手写一遍等价类划分表并对照检查"）。
+7. 用户可能收到【知识库原文片段】。写建议时优先依据这些片段；如果某个 weak_topic 没有对应片段，或片段不足以解释错因，source_status 填 "missing"，并在 source_note 中建议用户在原文档补充什么内容。不要编造原文，也不要凭空断言文档完全没有相关内容。
 8. study_plan 是对象数组，给出 3-5 条有先后顺序的复习步骤。topic 必须与某个 weak_topic 或逐题结果里的知识点一致；action 要具体说明补什么、怎么补、补到什么程度算过关。如果该知识点有原文片段，必须指出回看哪份文档的哪一小块；如果原文不足以解释错因，source_status 填 "missing"，source_note 说明应该在原文档里补充或优化什么概念、判断标准或例子。没有对应知识点时 topic 可以为空。
 9. encouragement 一句话，实事求是，不要浮夸。
 10. 如果用户全部答对，weak_topics 可以是空数组，但仍要在 study_plan 中给出进阶建议。
-11. 全部使用简体中文，保留必要的英文技术名词。
+11. 全部使用简体中文，保留必要的英文技术名词。plain_summary、study_points、flow_steps 都是重新组织的解释，不是原文摘录。
 
 只输出 JSON，不要输出任何 JSON 之外的内容。JSON 结构必须严格遵守如下模式：
 """ + REVIEW_SCHEMA

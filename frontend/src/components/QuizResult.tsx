@@ -3,6 +3,8 @@ import {
   ArrowRight,
   BookMarked,
   CheckCircle2,
+  GitBranch,
+  Lightbulb,
   Loader2,
   RotateCcw,
   Sparkles,
@@ -321,19 +323,67 @@ export function QuizResult({
 
       {review.weak_topics.length > 0 && (
         <section className="tool-card">
-          <h3 className="text-base font-semibold text-zinc-900">需要补的知识点</h3>
+          <h3 className="text-base font-semibold text-zinc-900">错因分析与快速理解</h3>
           <ul className="mt-4 space-y-4">
             {review.weak_topics.map((topic) => (
               <li key={topic.topic} className="border-t border-zinc-100 pt-4 first:border-0 first:pt-0">
                 <p className="text-sm font-semibold text-zinc-900">{topic.topic}</p>
                 {topic.diagnosis && (
-                  <p className="mt-1.5 text-sm leading-6 text-zinc-600">{topic.diagnosis}</p>
+                  <div className="mt-2.5 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                    <p className="text-xs font-semibold text-amber-800">为什么做错</p>
+                    <p className="mt-1 text-sm leading-6 text-amber-900">{topic.diagnosis}</p>
+                  </div>
+                )}
+                {topic.plain_summary && (
+                  <div className="mt-2.5 rounded-lg border border-emerald-100 bg-emerald-50 p-3">
+                    <p className="flex items-center gap-1.5 text-xs font-semibold text-emerald-800">
+                      <Lightbulb className="size-3.5" aria-hidden="true" />
+                      快速理解
+                    </p>
+                    <p className="mt-1 text-sm leading-6 text-emerald-900">{topic.plain_summary}</p>
+                  </div>
+                )}
+                {topic.analogy && (
+                  <div className="mt-2.5 rounded-lg border border-sky-100 bg-sky-50 p-3">
+                    <p className="text-xs font-semibold text-sky-800">类比理解</p>
+                    <p className="mt-1 text-sm leading-6 text-sky-900">{topic.analogy}</p>
+                  </div>
+                )}
+                {topic.flow_steps && topic.flow_steps.length > 0 && (
+                  <div className="mt-2.5 rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+                    <p className="flex items-center gap-1.5 text-xs font-semibold text-zinc-700">
+                      <GitBranch className="size-3.5" aria-hidden="true" />
+                      流程 / 关系
+                    </p>
+                    <ol className="mt-2 space-y-1.5">
+                      {topic.flow_steps.map((step, index) => (
+                        <li key={step} className="flex items-start gap-2">
+                          <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-white text-[10px] font-semibold text-zinc-700 ring-1 ring-zinc-300">
+                            {index + 1}
+                          </span>
+                          <span className="text-sm leading-6 text-zinc-700">{step}</span>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                )}
+                {topic.study_points.length > 0 && (
+                  <div className="mt-2.5">
+                    <p className="text-xs font-semibold text-zinc-700">要补的内容</p>
+                    <ul className="mt-1 space-y-1">
+                      {topic.study_points.map((point) => (
+                        <li key={point} className="text-sm leading-6 text-zinc-600">
+                          · {point}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 )}
                 {topic.source_refs && topic.source_refs.length > 0 && (
-                  <div className="mt-2.5 rounded-lg bg-zinc-50 p-3">
-                    <p className="text-xs font-semibold text-zinc-700">
-                      {topic.source_status === 'missing' ? '当前原文片段（建议继续补齐）' : '原文依据'}
-                    </p>
+                  <details className="mt-2.5 rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+                    <summary className="cursor-pointer text-xs font-semibold text-zinc-700">
+                      {topic.source_status === 'missing' ? '当前原文片段（建议继续补齐）' : '原文依据（点开核对）'}
+                    </summary>
                     <ul className="mt-2 space-y-2.5">
                       {topic.source_refs.map((ref, index) => (
                         <li key={`${ref.title}-${index}`} className="min-w-0">
@@ -357,7 +407,7 @@ export function QuizResult({
                         </li>
                       ))}
                     </ul>
-                  </div>
+                  </details>
                 )}
                 {topic.source_status === 'missing' && (
                   <div className="mt-2.5 rounded-lg border border-amber-200 bg-amber-50 p-3">
@@ -366,18 +416,6 @@ export function QuizResult({
                       {topic.source_note ||
                         '当前知识库片段还不足以解释这个错因，建议把相关概念、判断标准和例子补充到原文档后再练一次。'}
                     </p>
-                  </div>
-                )}
-                {topic.study_points.length > 0 && (
-                  <div className="mt-2.5">
-                    <p className="text-xs font-semibold text-zinc-700">要补的内容</p>
-                    <ul className="mt-1 space-y-1">
-                      {topic.study_points.map((point) => (
-                        <li key={point} className="text-sm leading-6 text-zinc-600">
-                          · {point}
-                        </li>
-                      ))}
-                    </ul>
                   </div>
                 )}
                 {topic.next_actions.length > 0 && (

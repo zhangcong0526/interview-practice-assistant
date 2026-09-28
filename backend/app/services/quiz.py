@@ -1725,6 +1725,9 @@ def _merge_review_part(left: dict, right: dict) -> dict:
     def richness(item: dict) -> int:
         return (
             len(str(item.get("diagnosis") or ""))
+            + len(str(item.get("plain_summary") or ""))
+            + len(str(item.get("analogy") or ""))
+            + sum(len(str(value)) for value in item.get("flow_steps") or [])
             + sum(len(str(value)) for value in item.get("study_points") or [])
             + sum(len(str(value)) for value in item.get("next_actions") or [])
         )
@@ -1970,6 +1973,11 @@ def _normalise_review(
             {
                 "topic": topic,
                 "diagnosis": str(item.get("diagnosis") or "").strip(),
+                "plain_summary": str(item.get("plain_summary") or "").strip(),
+                "analogy": str(item.get("analogy") or "").strip(),
+                "flow_steps": [
+                    str(v).strip() for v in (item.get("flow_steps") or []) if str(v).strip()
+                ],
                 "source_status": source_status,
                 "source_note": str(item.get("source_note") or "").strip(),
                 "study_points": [

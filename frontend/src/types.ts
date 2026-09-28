@@ -371,6 +371,9 @@ export interface GradedQuestion {
 export interface WeakTopic {
   topic: string
   diagnosis: string
+  plain_summary?: string
+  analogy?: string
+  flow_steps?: string[]
   source_status?: 'reinforce' | 'missing'
   source_note?: string
   study_points: string[]

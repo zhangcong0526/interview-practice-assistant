@@ -5,6 +5,7 @@ backend/data/
 backend/backend/
 **/.env
 __pycache__/
+.pytest_cache/
 *.py[cod]
 .DS_Store
 .idea/

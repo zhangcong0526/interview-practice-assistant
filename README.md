@@ -318,6 +318,14 @@ ffprobe -version
 
 `start.bat` 会清理这两个固定端口上的旧进程。如果其他重要软件正在使用这些端口，请先关闭它，或先运行 `stop.bat`。前端固定入口是 `http://127.0.0.1:5173/`，后端固定为 `http://127.0.0.1:8000`。
 
+### 5173 被 Windows 动态保留
+
+Windows 的 NAT/Hyper-V 动态端口保留区间有时会覆盖 `5173`，Node 会报 `EACCES`。启动器会先探测端口；发现这个问题时弹出一次管理员授权，把 `5173` 加入固定保留区间后再继续启动。也可以手动执行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\ensure-frontend-port.ps1
+```
+
 ### 第一次转写等了很久
 
 首次使用本地 Whisper 会下载模型到当前用户的 Hugging Face 缓存目录。网络较慢时只需等待首次下载完成，后续会复用本地缓存。

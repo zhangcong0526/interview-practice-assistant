@@ -212,39 +212,3 @@ def list_models(request: LlmModelsRequest) -> dict:
         "base_url": base_url,
         "models": models,
     }
-def test_config(request) -> dict:
-    status = _provider_status(request.provider)
-    api_key = request.api_key.strip()
-    if not api_key:
-        key_field = PROVIDER_FIELDS[request.provider][0]
-        api_key = getattr(settings, key_field)
-    base_url = request.base_url.strip() or status["base_url"]
-    model = request.model.strip() or status["model"]
-    if not api_key:
-        raise ValueError("请先填写或保存 API Key。")
-    if not base_url:
-        raise ValueError("Base URL 不能为空。")
-    if not model:
-        raise ValueError("模型名不能为空。")
-
-    client = OpenAI(api_key=api_key, base_url=base_url, timeout=15.0, max_retries=0)
-    started = time.perf_counter()
-    try:
-        client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": "ping"}],
-            temperature=0,
-            max_tokens=1,
-        )
-    except Exception as exc:
-        raise ValueError(f"连通性测试失败：{exc}") from exc
-
-    latency_ms = round((time.perf_counter() - started) * 1000)
-    return {
-        "ok": True,
-        "provider": request.provider,
-        "base_url": base_url,
-        "model": model,
-        "latency_ms": latency_ms,
-        "message": "连通性正常，模型可调用。",
-    }

@@ -10,28 +10,35 @@ class LlmError(RuntimeError):
     pass
 
 
-def _provider_config() -> tuple[str, str, str]:
-    if settings.llm_provider == "deepseek":
+# SDK 默认超时 600 秒且失败自动重试 2 次；上游卡住时前端会长时间转圈，
+# 因此对组卷、对话等长任务显式设置有界超时，并关闭 SDK 层隐藏重试。
+CHAT_TIMEOUT_SECONDS = 120.0
+DIALOGUE_TIMEOUT_SECONDS = 60.0
+
+
+def _provider_config(provider: str | None = None) -> tuple[str, str, str]:
+    provider = provider or settings.llm_provider
+    if provider == "deepseek":
         if not settings.deepseek_api_key:
             raise LlmError("未配置 DEEPSEEK_API_KEY。请在 backend/.env 中设置。")
         return settings.deepseek_api_key, settings.deepseek_base_url, settings.deepseek_model
-    if settings.llm_provider == "ark":
+    if provider == "ark":
         if not settings.ark_api_key:
             raise LlmError("未配置 ARK_API_KEY。请在模型配置页填写。")
         if not settings.ark_model:
             raise LlmError("未配置 ARK_MODEL。请填写火山方舟 Model ID 或接入点 ID。")
         return settings.ark_api_key, settings.ark_base_url, settings.ark_model
-    if settings.llm_provider == "minimax":
+    if provider == "minimax":
         if not settings.minimax_api_key:
             raise LlmError("未配置 MINIMAX_API_KEY。请在模型配置页填写。")
         if not settings.minimax_model:
             raise LlmError("未配置 MINIMAX_MODEL。请填写 MiniMax 模型名。")
         return settings.minimax_api_key, settings.minimax_base_url, settings.minimax_model
-    if settings.llm_provider == "openai":
+    if provider == "openai":
         if not settings.openai_api_key:
             raise LlmError("未配置 OPENAI_API_KEY。请在 backend/.env 中设置。")
         return settings.openai_api_key, settings.openai_base_url, settings.openai_model
-    raise LlmError(f"不支持的 LLM_PROVIDER: {settings.llm_provider}")
+    raise LlmError(f"不支持的 LLM_PROVIDER: {provider}")
 
 
 def _completion(client: OpenAI, *, model: str, messages: list[dict], temperature: float, max_tokens: int, json_mode: bool):
@@ -58,13 +65,25 @@ def _completion(client: OpenAI, *, model: str, messages: list[dict], temperature
         raise
 
 
-def chat_json(system: str, user: str, max_tokens: int = 8000) -> dict:
-    api_key, base_url, model = _provider_config()
-    client = OpenAI(api_key=api_key, base_url=base_url)
+def chat_json(
+    system: str,
+    user: str,
+    max_tokens: int = 8000,
+    *,
+    provider: str | None = None,
+    model: str | None = None,
+) -> dict:
+    api_key, base_url, resolved_model = _provider_config(provider)
+    client = OpenAI(
+        api_key=api_key,
+        base_url=base_url,
+        timeout=CHAT_TIMEOUT_SECONDS,
+        max_retries=0,
+    )
     try:
         resp = _completion(
             client,
-            model=model,
+            model=model or resolved_model,
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -92,7 +111,12 @@ def chat_json_messages(
 ) -> dict:
     """多轮对话版本，用于模拟面试官逐轮提问。"""
     api_key, base_url, model = _provider_config()
-    client = OpenAI(api_key=api_key, base_url=base_url)
+    client = OpenAI(
+        api_key=api_key,
+        base_url=base_url,
+        timeout=DIALOGUE_TIMEOUT_SECONDS,
+        max_retries=0,
+    )
     last_error: Exception | None = None
     for attempt in range(retries + 1):
         try:

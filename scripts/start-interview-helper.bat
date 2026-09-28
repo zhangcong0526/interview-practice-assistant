@@ -206,6 +206,14 @@ if not "%PACKAGE_LOCK_HASH%"=="%FRONTEND_STAMP_CONTENT%" (
     > "%FRONTEND_STAMP%" echo %PACKAGE_LOCK_HASH%
 )
 
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PROJECT_DIR%\scripts\ensure-frontend-port.ps1"
+if errorlevel 1 (
+    echo [ERROR] Frontend port %FRONTEND_PORT% is unavailable.
+    echo         Windows may have reserved it. Approve the repair prompt or run:
+    echo         powershell -ExecutionPolicy Bypass -File "%PROJECT_DIR%\scripts\ensure-frontend-port.ps1"
+    goto :fail
+)
+
 echo [4/5] Cleaning stale services and starting backend...
 for %%P in (%BACKEND_PORT% %FRONTEND_PORT%) do (
     for /f "tokens=5" %%A in ('netstat -ano ^| findstr /R /C:"LISTENING" ^| findstr /R /C:":%%P "') do (

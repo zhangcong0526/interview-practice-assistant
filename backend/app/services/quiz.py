@@ -35,7 +35,7 @@ TYPE_LABELS = {"single": "单选题", "multiple": "多选题", "judge": "判断�
 MAX_MATERIAL_CHARS = 24_000
 MAX_QUESTIONS = 30
 QUIZ_LLM_BATCH_SIZE = 8
-QUIZ_FAST_SINGLE_CALL_LIMIT = 20
+QUIZ_FAST_SINGLE_CALL_LIMIT = 8
 # 连续两次答对即视为该知识点已回稳，可以移出错题本。
 MISTAKE_CLEAR_STREAK = 2
 MASTERY_VERSION = 3
@@ -523,6 +523,13 @@ def _request_quiz_raw_once(
     weak_topics: list[str],
     coverage_hint: list[str],
 ) -> dict:
+    # Ark 的思考型模型生成完整试卷常超过 120 秒；组卷只依赖结构化 JSON，
+    # 这里优先复用已配置的 DeepSeek Chat 作为低延迟命题通道，避免主模型被单独卡住。
+    quiz_provider = None
+    quiz_model = None
+    if settings.llm_provider == "ark" and settings.deepseek_api_key:
+        quiz_provider = "deepseek"
+        quiz_model = "deepseek-chat"
     return llm_service.chat_json(
         prompts.QUIZ_SYSTEM,
         prompts.build_quiz_user(
@@ -534,6 +541,8 @@ def _request_quiz_raw_once(
             weak_topics,
             coverage_hint,
         ),
+        provider=quiz_provider,
+        model=quiz_model,
     )
 
 

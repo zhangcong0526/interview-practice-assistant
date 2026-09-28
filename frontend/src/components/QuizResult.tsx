@@ -329,6 +329,45 @@ export function QuizResult({
                 {topic.diagnosis && (
                   <p className="mt-1.5 text-sm leading-6 text-zinc-600">{topic.diagnosis}</p>
                 )}
+                {topic.source_refs && topic.source_refs.length > 0 && (
+                  <div className="mt-2.5 rounded-lg bg-zinc-50 p-3">
+                    <p className="text-xs font-semibold text-zinc-700">
+                      {topic.source_status === 'missing' ? '当前原文片段（建议继续补齐）' : '原文依据'}
+                    </p>
+                    <ul className="mt-2 space-y-2.5">
+                      {topic.source_refs.map((ref, index) => (
+                        <li key={`${ref.title}-${index}`} className="min-w-0">
+                          <p className="truncate text-xs font-medium text-zinc-600">
+                            《{ref.title}》
+                          </p>
+                          <blockquote className="mt-1 border-l-2 border-zinc-300 pl-2.5 text-sm leading-6 text-zinc-700">
+                            {ref.text}
+                          </blockquote>
+                          {ref.url && (
+                            <a
+                              href={ref.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-emerald-700 hover:text-emerald-800"
+                            >
+                              打开原文
+                              <ArrowRight className="size-3" aria-hidden="true" />
+                            </a>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {topic.source_status === 'missing' && (
+                  <div className="mt-2.5 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                    <p className="text-xs font-semibold text-amber-800">原文档缺口</p>
+                    <p className="mt-1 text-sm leading-6 text-amber-900">
+                      {topic.source_note ||
+                        '当前知识库片段还不足以解释这个错因，建议把相关概念、判断标准和例子补充到原文档后再练一次。'}
+                    </p>
+                  </div>
+                )}
                 {topic.study_points.length > 0 && (
                   <div className="mt-2.5">
                     <p className="text-xs font-semibold text-zinc-700">要补的内容</p>

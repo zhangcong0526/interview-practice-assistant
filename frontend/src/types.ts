@@ -371,8 +371,17 @@ export interface GradedQuestion {
 export interface WeakTopic {
   topic: string
   diagnosis: string
+  source_status?: 'reinforce' | 'missing'
+  source_note?: string
   study_points: string[]
   next_actions: string[]
+  source_refs?: QuizSourceReference[]
+}
+
+export interface QuizSourceReference {
+  title: string
+  text: string
+  url: string
 }
 
 export interface QuizTypeStat {

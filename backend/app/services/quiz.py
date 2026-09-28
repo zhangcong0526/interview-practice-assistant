@@ -33,6 +33,7 @@ TOPICS_FILE = QUIZ_DIR / "topics.json"
 VALID_TYPES = ("single", "multiple", "judge")
 TYPE_LABELS = {"single": "单选题", "multiple": "多选题", "judge": "判断题"}
 MAX_MATERIAL_CHARS = 24_000
+MAX_REVIEW_SOURCE_CHARS = 3_600
 MAX_QUESTIONS = 30
 QUIZ_LLM_BATCH_SIZE = 8
 QUIZ_FAST_SINGLE_CALL_LIMIT = 8
@@ -356,6 +357,104 @@ def _load_document_text(doc_id: str) -> str:
     if not doc:
         return ""
     return "\n\n".join(doc.get("chunks") or [])
+
+
+def _title_key(title: str) -> str:
+    return _normalise_topic_key(title)
+
+
+def _collect_review_sources(
+    graded: list[dict],
+    topic_stats: dict[str, dict] | None = None,
+) -> dict[str, list[dict]]:
+    """为复习指引检索原文片段，避免建议脱离用户上传的知识库。"""
+    topic_stats = topic_stats or {}
+    wanted: list[tuple[str, str]] = []
+    seen_topics: set[str] = set()
+
+    for item in graded:
+        topic = str(item.get("topic") or "未分类").strip() or "未分类"
+        history = topic_stats.get(topic) or {}
+        try:
+            accuracy = float(history.get("correct", 0)) / max(1, int(history.get("total", 0)))
+        except (TypeError, ValueError):
+            accuracy = 1.0
+        if item.get("is_correct") and accuracy >= 0.8:
+            continue
+        if topic in seen_topics:
+            continue
+        seen_topics.add(topic)
+        wanted.append((topic, str(item.get("source_title") or "").strip()))
+
+    sources: dict[str, list[dict]] = {}
+    for topic, source_title in wanted:
+        search_queries = []
+        if source_title:
+            search_queries.append(f"{source_title} {topic}")
+        search_queries.append(topic)
+
+        hits: list[dict] = []
+        seen_chunks: set[str] = set()
+        for query in search_queries:
+            try:
+                results = knowledge_service.search(query, limit=6)
+            except Exception:
+                results = []
+            for hit in results:
+                chunk_id = str(hit.get("chunk_id") or "")
+                if not chunk_id or chunk_id in seen_chunks:
+                    continue
+                seen_chunks.add(chunk_id)
+                hits.append(hit)
+
+        # 题目标注的 source_title 优先。找不到原文档时才允许用其他资料兜底，
+        # 这样提示里能明确区分“原文可加强”和“原文档需要补充”。
+        if source_title:
+            title_key = _title_key(source_title)
+            matched = [
+                hit for hit in hits
+                if _title_key(str(hit.get("title") or "")) == title_key
+            ]
+            if matched:
+                hits = matched
+
+        selected: list[dict] = []
+        used_chars = 0
+        for hit in hits:
+            text = str(hit.get("text") or "").strip()
+            if not text:
+                continue
+            text = text[:700]
+            if used_chars + len(text) > MAX_REVIEW_SOURCE_CHARS:
+                break
+            used_chars += len(text)
+            selected.append(
+                {
+                    "title": str(hit.get("title") or "知识库文档"),
+                    "text": text,
+                    "url": str(hit.get("source_url") or "").strip(),
+                }
+            )
+            if len(selected) >= 3:
+                break
+
+        if selected:
+            sources[topic] = selected
+
+    return sources
+
+
+def _format_review_sources(sources: dict[str, list[dict]]) -> str:
+    blocks: list[str] = []
+    for topic, refs in sources.items():
+        lines = [f"【知识点：{topic}】"]
+        for index, ref in enumerate(refs, start=1):
+            url = str(ref.get("url") or "").strip()
+            suffix = f"（链接：{url}）" if url else ""
+            lines.append(f"片段{index} · 《{ref.get('title', '')}》{suffix}")
+            lines.append(str(ref.get("text") or "").strip())
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
 
 
 # --------------------------------------------------------------------------
@@ -1353,6 +1452,7 @@ def grade(paper_id: str, answers: dict[str, list[str]]) -> dict:
 
     topic_stats = _update_mastery(graded)
     _update_mistakes(graded, paper)
+    review_sources = _collect_review_sources(graded, topic_stats)
 
     history = [
         {
@@ -1367,7 +1467,13 @@ def grade(paper_id: str, answers: dict[str, list[str]]) -> dict:
     try:
         review = llm_service.chat_json(
             prompts.REVIEW_SYSTEM,
-            prompts.build_review_user(graded, score, accuracy, history),
+            prompts.build_review_user(
+                graded,
+                score,
+                accuracy,
+                history,
+                _format_review_sources(review_sources),
+            ),
         )
     except llm_service.LlmError as exc:
         # 判分是本地算的，复习指引失败不应该让用户丢失成绩。
@@ -1382,7 +1488,7 @@ def grade(paper_id: str, answers: dict[str, list[str]]) -> dict:
             "review_error": f"复习建议生成失败：{exc}",
         }
 
-    review = _normalise_review(review, accuracy)
+    review = _normalise_review(review, accuracy, review_sources)
     review["learning_guide"] = _build_learning_guide(graded, paper)
 
     attempt_id = uuid.uuid4().hex
@@ -1412,7 +1518,11 @@ def _local_mastery_level(accuracy: float) -> str:
     return "beginner"
 
 
-def _normalise_review(review: dict, accuracy: float) -> dict:
+def _normalise_review(
+    review: dict,
+    accuracy: float,
+    review_sources: dict[str, list[dict]] | None = None,
+) -> dict:
     level = str(review.get("mastery_level") or "").strip().lower()
     if level not in ("beginner", "developing", "proficient", "mastered"):
         level = _local_mastery_level(accuracy)
@@ -1424,16 +1534,25 @@ def _normalise_review(review: dict, accuracy: float) -> dict:
         topic = str(item.get("topic") or "").strip()
         if not topic:
             continue
+        source_refs = (review_sources or {}).get(topic) or []
+        source_status = str(item.get("source_status") or "").strip().lower()
+        if source_status not in ("reinforce", "missing"):
+            source_status = "reinforce" if source_refs else "missing"
+        if not source_refs:
+            source_status = "missing"
         weak_topics.append(
             {
                 "topic": topic,
                 "diagnosis": str(item.get("diagnosis") or "").strip(),
+                "source_status": source_status,
+                "source_note": str(item.get("source_note") or "").strip(),
                 "study_points": [
                     str(v).strip() for v in (item.get("study_points") or []) if str(v).strip()
                 ],
                 "next_actions": [
                     str(v).strip() for v in (item.get("next_actions") or []) if str(v).strip()
                 ],
+                "source_refs": source_refs,
             }
         )
 

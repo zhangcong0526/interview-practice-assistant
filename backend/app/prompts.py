@@ -369,7 +369,14 @@ REVIEW_SCHEMA = """{
   "can_advance": false,
   "advance_reason": "",
   "weak_topics": [
-    {"topic": "", "diagnosis": "", "study_points": [], "next_actions": []}
+    {
+      "topic": "",
+      "diagnosis": "",
+      "source_status": "reinforce",
+      "source_note": "",
+      "study_points": [],
+      "next_actions": []
+    }
   ],
   "study_plan": [],
   "encouragement": ""
@@ -385,10 +392,12 @@ REVIEW_SYSTEM = """你是一位 IT 测试方向的学习教练。用户刚完成
 3. can_advance 表示是否可以进入下一个板块的练习。只有当本次正确率达到 85% 以上、并且没有任何知识点在历史上反复出错时，才可以设为 true。
 4. advance_reason 用一句话说明为什么可以或不可以进入下一板块，要给出具体依据（例如"多选题错 3 道，说明对 X 的边界条件还不清楚"）。
 5. weak_topics 只列出本次答错或历史正确率偏低的知识点。diagnosis 说明用户是哪里理解错了（结合他选错的选项推断误区），study_points 列出该知识点需要补的具体内容，next_actions 给出可立即执行的动作（例如"手写一遍等价类划分表并对照检查"）。
-6. study_plan 给出 3-5 条有先后顺序的复习步骤，每条都要具体可执行，说明补什么、怎么补、补到什么程度算过关。
-7. encouragement 一句话，实事求是，不要浮夸。
-8. 如果用户全部答对，weak_topics 可以是空数组，但仍要在 study_plan 中给出进阶建议。
-9. 全部使用简体中文，保留必要的英文技术名词。
+6. 用户可能收到【知识库原文片段】。写建议时优先依据这些片段；如果某个 weak_topic 没有对应片段，或片段不足以解释错因，source_status 填 "missing"，并在 source_note 中建议用户在原文档补充什么内容。不要编造原文，也不要凭空断言文档完全没有相关内容。
+7. study_points 要用小白能听懂的顺序解释：先一句话说它是什么，再说它为什么/怎么运作，最后指出容易混淆的地方。避免只堆术语；必须给出一个具体例子或判断办法。
+8. study_plan 给出 3-5 条有先后顺序的复习步骤，每条都要具体可执行，说明补什么、怎么补、补到什么程度算过关。
+9. encouragement 一句话，实事求是，不要浮夸。
+10. 如果用户全部答对，weak_topics 可以是空数组，但仍要在 study_plan 中给出进阶建议。
+11. 全部使用简体中文，保留必要的英文技术名词。
 
 只输出 JSON，不要输出任何 JSON 之外的内容。JSON 结构必须严格遵守如下模式：
 """ + REVIEW_SCHEMA
@@ -399,6 +408,7 @@ def build_review_user(
     score: float,
     accuracy: float,
     topic_history: list[dict] | None = None,
+    review_sources: str = "",
 ) -> str:
     lines = [f"【本次成绩】\n得分 {score} 分，正确率 {round(accuracy * 100)}%"]
 
@@ -420,6 +430,14 @@ def build_review_user(
             for item in topic_history
         ]
         lines.append("【该用户在这些知识点上的历史表现】\n" + "\n".join(history_lines))
+
+    if review_sources.strip():
+        lines.append(
+            "【知识库原文片段】\n"
+            + review_sources.strip()
+            + "\n\n这些片段来自用户上传/导入的知识库，用于说明薄弱点在原文里的位置和不足。"
+            "建议不要照抄整段；只在 next_actions 里提示用户回看哪份文档、补哪一小块。"
+        )
 
     return "\n\n".join(lines)
 

@@ -40,6 +40,8 @@ const TYPE_LABEL: Record<string, string> = {
   judge: '判断题',
 }
 
+const QUESTION_TYPE_ORDER = ['single', 'multiple', 'judge'] as const
+
 export function QuizResult({
   attempt,
   cumulativeMistakeCount,
@@ -53,6 +55,17 @@ export function QuizResult({
   const { review } = attempt
   const guide = review.learning_guide
   const wrongQuestions = attempt.questions.filter((item) => !item.is_correct)
+  const currentTypeStats = QUESTION_TYPE_ORDER.map((type) => {
+    const questions = attempt.questions.filter((item) => item.type === type)
+    const correct = questions.filter((item) => item.is_correct).length
+    return {
+      type,
+      label: TYPE_LABEL[type],
+      total: questions.length,
+      correct,
+      accuracy: questions.length > 0 ? correct / questions.length : 0,
+    }
+  }).filter((stat) => stat.total > 0)
   const currentMistakeCount = wrongQuestions.length
   const retryDisabled =
     busy ||
@@ -177,8 +190,9 @@ export function QuizResult({
             </div>
             <p className="mt-2 text-sm leading-6 text-zinc-700">{guide.summary}</p>
 
-            <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
-              {guide.type_stats.map((stat) => (
+            <p className="mt-3 text-xs font-semibold text-zinc-700">本次题型表现</p>
+            <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
+              {currentTypeStats.map((stat) => (
                 <div key={stat.type} className="rounded-lg bg-white px-3 py-2 ring-1 ring-zinc-200">
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-xs font-medium text-zinc-600">{stat.label}</span>

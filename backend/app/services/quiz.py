@@ -313,7 +313,7 @@ def _ensure_mastery_schema() -> dict:
 
 def _collect_material(
     keywords: list[str], doc_ids: list[str], per_keyword: int = 4
-) -> tuple[str, list[str], list[dict]]:
+) -> tuple[str, list[str], list[dict], list[dict]]:
     """按关键词检索知识库片段，拼成命题资料。
 
     没有关键词时退化为使用指定文档（或全部文档）的开头内容。
@@ -321,6 +321,7 @@ def _collect_material(
     """
     used_titles: list[str] = []
     used_docs: list[dict] = []
+    used_chunks: list[dict] = []
     doc_by_id: dict[str, dict] = {}
     blocks: list[str] = []
     seen_chunks: set[str] = set()
@@ -335,6 +336,15 @@ def _collect_material(
         if title and title not in used_titles:
             used_titles.append(title)
 
+    def remember_chunk(doc_id: str, title: str, chunk_id: str) -> None:
+        if not doc_id or not chunk_id:
+            return
+        if not any(
+            chunk.get("doc_id") == doc_id and chunk.get("chunk_id") == chunk_id
+            for chunk in used_chunks
+        ):
+            used_chunks.append({"doc_id": doc_id, "title": title, "chunk_id": chunk_id})
+
     def push(title: str, text: str, chunk_id: str, doc_id: str = "") -> None:
         nonlocal budget
         if chunk_id in seen_chunks or budget <= 0:
@@ -344,6 +354,7 @@ def _collect_material(
         blocks.append(f"[资料来源：{title}]\n{snippet}")
         budget -= len(snippet)
         remember_doc(doc_id, title)
+        remember_chunk(doc_id, title, chunk_id)
 
     doc_filter = set(doc_ids or [])
 
@@ -361,7 +372,7 @@ def _collect_material(
             if full:
                 push(doc["title"], full, doc["doc_id"], doc["doc_id"])
 
-    return "\n\n".join(blocks), used_titles, used_docs
+    return "\n\n".join(blocks), used_titles, used_docs, used_chunks
 
 
 def _load_document_text(doc_id: str) -> str:
@@ -393,12 +404,28 @@ def _title_key(title: str) -> str:
 def _collect_review_sources(
     graded: list[dict],
     topic_stats: dict[str, dict] | None = None,
+    paper_docs: dict | None = None,
 ) -> dict[str, list[dict]]:
     """为复习指引检索原文片段，避免建议脱离用户上传的知识库。"""
     topic_stats = topic_stats or {}
     wanted: dict[str, list[str]] = {}
     lineage_docs: dict[str, list[dict]] = {}
+    lineage_chunks: dict[str, list[str]] = {}
     docs_by_title = _knowledge_docs_by_title()
+    fallback_paper_docs = _mistake_paper_docs(paper_docs)
+
+    def add_chunks(topic: str, chunk_ids) -> None:
+        known = lineage_chunks.setdefault(topic, [])
+        for chunk_id in chunk_ids or []:
+            value = str(chunk_id or "").strip()
+            if value and value not in known:
+                known.append(value)
+
+    def add_chunk_lineage(topic: str, chunk_ids, title: str = "") -> None:
+        for chunk_id in chunk_ids or []:
+            doc_id = str(chunk_id or "").strip().rsplit("-", 1)[0]
+            if doc_id:
+                add_lineage(topic, [{"doc_id": doc_id, "title": title}])
 
     def add_lineage(topic: str, docs) -> None:
         known = lineage_docs.setdefault(topic, [])
@@ -436,6 +463,11 @@ def _collect_review_sources(
             topic,
             [{"doc_id": item.get("source_doc_id") or "", "title": source_title}],
         )
+        add_chunks(topic, item.get("source_chunk_ids"))
+        if not item.get("source_doc_id") and not item.get("source_chunk_ids"):
+            add_lineage(topic, fallback_paper_docs)
+        elif not item.get("source_doc_id"):
+            add_chunk_lineage(topic, item.get("source_chunk_ids"), source_title)
 
     # 历史错题可能来自同一知识点的其他文档。这里只合并来源标题，
     # 不直接拿历史题干，避免复习步骤被旧题目带偏。
@@ -448,6 +480,7 @@ def _collect_review_sources(
         if source_title and source_title not in titles:
             titles.append(source_title)
         add_lineage(topic, mistake.get("source_docs"))
+        add_chunks(topic, mistake.get("source_chunk_ids"))
 
     sources: dict[str, list[dict]] = {}
     for topic, source_titles in wanted.items():
@@ -457,6 +490,7 @@ def _collect_review_sources(
 
         hits: list[dict] = []
         seen_chunks: set[str] = set()
+        lineage_refs: list[dict] = []
 
         # 老错题补齐过文档线索后，直接读原文档片段，避免搜索匹配不到出处。
         for doc in lineage_docs.get(topic, []):
@@ -465,12 +499,29 @@ def _collect_review_sources(
                 continue
             doc_title = str(loaded.get("title") or doc.get("title") or "")
             source_url = str(loaded.get("source_url") or "")
-            for index, text in _ranked_doc_chunks(loaded, topic):
+            doc_chunks = loaded.get("chunks") or []
+            preferred_chunks: list[tuple[int, str]] = []
+            for chunk_id in lineage_chunks.get(topic, []):
+                if not chunk_id.startswith(f"{doc['doc_id']}-"):
+                    continue
+                suffix = chunk_id[len(doc["doc_id"]) + 1 :]
+                if not suffix.isdigit():
+                    continue
+                index = int(suffix)
+                if 0 <= index < len(doc_chunks):
+                    preferred_chunks.append((index, str(doc_chunks[index] or "")))
+
+            if preferred_chunks:
+                doc_chunk_results = preferred_chunks
+            else:
+                doc_chunk_results = _ranked_doc_chunks(loaded, topic)
+
+            for index, text in doc_chunk_results:
                 chunk_id = f"{doc['doc_id']}-{index}"
                 if chunk_id in seen_chunks:
                     continue
                 seen_chunks.add(chunk_id)
-                hits.append(
+                lineage_refs.append(
                     {
                         "chunk_id": chunk_id,
                         "doc_id": doc["doc_id"],
@@ -480,17 +531,22 @@ def _collect_review_sources(
                     }
                 )
 
-        for query in search_queries:
-            try:
-                results = knowledge_service.search(query, limit=6)
-            except Exception:
-                results = []
-            for hit in results:
-                chunk_id = str(hit.get("chunk_id") or "")
-                if not chunk_id or chunk_id in seen_chunks:
-                    continue
-                seen_chunks.add(chunk_id)
-                hits.append(hit)
+        # 已有可信片段来源时不做全库搜索，避免综合材料把复习范围扩散。
+        # 来源文档被删除或片段无法命中时，再降级为原有全库检索。
+        if lineage_refs:
+            hits.extend(lineage_refs)
+        else:
+            for query in search_queries:
+                try:
+                    results = knowledge_service.search(query, limit=6)
+                except Exception:
+                    results = []
+                for hit in results:
+                    chunk_id = str(hit.get("chunk_id") or "")
+                    if not chunk_id or chunk_id in seen_chunks:
+                        continue
+                    seen_chunks.add(chunk_id)
+                    hits.append(hit)
 
         # 已知来源文档的片段排前面，但不再把其他文档过滤掉。
         # 这样同一知识点在多份文档里交叉出现时，复习建议能同时引用。
@@ -919,7 +975,7 @@ def generate_paper(
     if total > MAX_QUESTIONS:
         raise QuizError(f"单份试卷最多 {MAX_QUESTIONS} 道题。")
 
-    material, used_titles, used_docs = _collect_material(keywords, doc_ids or [])
+    material, used_titles, used_docs, used_chunks = _collect_material(keywords, doc_ids or [])
     if not material.strip():
         raise QuizError("没有检索到相关资料，请更换关键词或先导入知识库文档。")
 
@@ -1044,6 +1100,11 @@ def generate_paper(
         if matched:
             question["source_doc_id"] = matched["doc_id"]
             question["source_docs"] = [dict(matched)]
+            question["source_chunk_ids"] = [
+                chunk["chunk_id"]
+                for chunk in used_chunks
+                if chunk.get("doc_id") == matched["doc_id"]
+            ]
 
     paper_id = uuid.uuid4().hex
     title = raw_title
@@ -1057,6 +1118,7 @@ def generate_paper(
         "doc_titles": used_titles,
         "doc_ids": [doc["doc_id"] for doc in used_docs],
         "source_docs": used_docs,
+        "source_chunks": used_chunks,
         "difficulty": difficulty,
         "questions": questions,
         "created_at": int(time.time()),
@@ -1121,6 +1183,7 @@ def generate_mistake_paper(
         topics = _current_mistake_topics(attempt_id, limit)
     else:
         topics = _all_mistake_topics(limit)
+    doc_ids = _mistake_source_doc_ids(topics)
     counts = {
         "single": max(2, min(5, len(topics))),
         "multiple": 2,
@@ -1131,7 +1194,7 @@ def generate_mistake_paper(
         counts["judge"] = max(0, MAX_QUESTIONS - counts["single"] - counts["multiple"])
     return generate_paper(
         topics,
-        [],
+        doc_ids,
         single=counts["single"],
         multiple=counts["multiple"],
         judge=counts["judge"],
@@ -1227,6 +1290,22 @@ def _topic_type_coverage_hint(topics: list[str]) -> list[str]:
 def _answer_text(question: dict, keys: list[str]) -> str:
     lookup = {option["key"]: option["text"] for option in question.get("options") or []}
     return "；".join(f"{key}. {lookup.get(key, '')}" for key in keys) if keys else ""
+
+
+def _mistake_source_doc_ids(topics: list[str]) -> list[str]:
+    """错题重练只引用这些知识点对应错题的原始来源文档；无线索时回退全库。"""
+    valid_doc_ids = {
+        doc["doc_id"] for doc in knowledge_service.list_documents() if doc.get("doc_id")
+    }
+    wanted_topics = set(topics)
+    doc_ids: list[str] = []
+    for mistake in list_mistakes(limit=10_000):
+        if str(mistake.get("topic") or "") not in wanted_topics:
+            continue
+        doc_id = str(mistake.get("source_doc_id") or "")
+        if doc_id and doc_id in valid_doc_ids and doc_id not in doc_ids:
+            doc_ids.append(doc_id)
+    return doc_ids
 
 
 def _accuracy(correct: int, total: int) -> float:
@@ -1559,6 +1638,7 @@ def grade(paper_id: str, answers: dict[str, list[str]]) -> dict:
                 "is_correct": is_correct,
                 "explanation": question.get("explanation", ""),
                 "source_title": question.get("source_title", ""),
+                "source_chunk_ids": question.get("source_chunk_ids", []),
                 "user_answer_text": _answer_text(question, picked),
                 "correct_answer_text": _answer_text(question, expected),
             }
@@ -1570,7 +1650,7 @@ def grade(paper_id: str, answers: dict[str, list[str]]) -> dict:
 
     topic_stats = _update_mastery(graded)
     _update_mistakes(graded, paper)
-    review_sources = _collect_review_sources(graded, topic_stats)
+    review_sources = _collect_review_sources(graded, topic_stats, paper)
 
     history = [
         {
@@ -1791,6 +1871,7 @@ def _update_mistakes(graded: list[dict], paper: dict) -> None:
                 if source_doc_id
                 else []
             ),
+            "source_chunk_ids": list(item.get("source_chunk_ids") or []),
             "paper_doc_ids": [doc["doc_id"] for doc in paper_docs if doc.get("doc_id")],
             "paper_doc_titles": [doc["title"] for doc in paper_docs if doc.get("title")],
         }

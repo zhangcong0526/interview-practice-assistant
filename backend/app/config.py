@@ -18,6 +18,12 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_base_url: str = "https://api.openai.com/v1"
     openai_model: str = "gpt-4o-mini"
+    # 可选：给复习分析单独换更快/更便宜的模型；留空则使用当前全局模型。
+    review_model: str = ""
+    # MiniMax 会先输出 <think> 推理，JSON 推理单独 token 预算需要放大、批数更小。
+    minimax_max_tokens: int = 16000
+    minimax_batch_size: int = 6
+    minimax_timeout_seconds: int = 180
 
     # 语音转写
     # local：本地 faster-whisper，无需 API Key（默认）

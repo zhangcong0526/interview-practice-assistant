@@ -1,9 +1,29 @@
 import json
 import re
+import logging
+import time
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 from openai import OpenAI
 
 from ..config import settings
+
+
+# LLM 调用日志，便于排查 MiniMax 等慢模型的超时/截断问题。
+LOG_DIR = Path(__file__).resolve().parents[2] / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+llm_logger = logging.getLogger("interview_assistant.llm")
+if not llm_logger.handlers:
+    _handler = RotatingFileHandler(
+        LOG_DIR / "llm.log",
+        maxBytes=2 * 1024 * 1024,
+        backupCount=3,
+        encoding="utf-8",
+    )
+    _handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    llm_logger.addHandler(_handler)
+    llm_logger.setLevel(logging.INFO)
 
 
 class LlmError(RuntimeError):
@@ -75,12 +95,29 @@ def chat_json(
     timeout: float | None = None,
 ) -> dict:
     api_key, base_url, resolved_model = _provider_config(provider)
+    provider_name = provider or settings.llm_provider
+    if timeout is None:
+        if provider_name == "minimax":
+            try:
+                timeout = float(getattr(settings, "minimax_timeout_seconds", 180))
+            except (TypeError, ValueError):
+                timeout = 180.0
+        else:
+            timeout = CHAT_TIMEOUT_SECONDS
     client = OpenAI(
         api_key=api_key,
         base_url=base_url,
-        timeout=timeout or CHAT_TIMEOUT_SECONDS,
+        timeout=timeout,
         max_retries=0,
     )
+    llm_logger.info(
+        "call start provider=%s model=%s max_tokens=%d timeout=%.1f",
+        provider_name,
+        model or resolved_model,
+        max_tokens,
+        timeout,
+    )
+    start_ts = time.perf_counter()
     try:
         resp = _completion(
             client,
@@ -101,7 +138,60 @@ def chat_json(
         raise LlmError(
             "模型输出达到长度上限被截断，返回的 JSON 不完整。请缩短输入内容后重试。"
         )
-    return _parse_json(content)
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+    last_error: Exception | None = None
+    for attempt in range(2):
+        try:
+            resp_iter = _completion(
+                client,
+                model=model or resolved_model,
+                messages=messages,
+                temperature=0.3 if attempt == 0 else 0.2,
+                max_tokens=max_tokens,
+                json_mode=True,
+            )
+        except Exception as exc:
+            raise LlmError(f"调用 LLM 失败: {exc}") from exc
+        choice_iter = resp_iter.choices[0]
+        content_iter = choice_iter.message.content or ""
+        elapsed = time.perf_counter() - start_ts
+        llm_logger.info(
+            "call attempt=%d provider=%s model=%s elapsed=%.2f finish=%s content_len=%d",
+            attempt,
+            provider_name,
+            model or resolved_model,
+            elapsed,
+            choice_iter.finish_reason,
+            len(content_iter),
+        )
+        if choice_iter.finish_reason == "length":
+            raise LlmError(
+                "模型输出达到长度上限被截断，返回的 JSON 不完整。请缩短输入内容后重试。"
+            )
+        try:
+            return _parse_json(content_iter)
+        except LlmError as exc:
+            last_error = exc
+            # 第一次失败时追加一条只输出严格 JSON 的指令再试一次。
+            messages = messages + [
+                {
+                    "role": "user",
+                    "content": (
+                        "上面输出无法解析为 JSON，请只输出严格合法的 JSON，"
+                        "不要包含<think>、解释、注释或前后缀文字。"
+                    ),
+                }
+            ]
+    llm_logger.warning(
+        "call failed provider=%s model=%s last_error=%s",
+        provider_name,
+        model or resolved_model,
+        str(last_error)[:200] if last_error else "",
+    )
+    raise LlmError(str(last_error) if last_error else "LLM 返回内容无法解析为 JSON。")
 
 
 def chat_json_messages(
@@ -155,6 +245,9 @@ def chat_json_messages(
 
 
 def _parse_json(content: str) -> dict:
+    # MiniMax 等思考型模型会在正式 JSON 前先输出 <think>...</think>，
+    # 解析前先把这部分去掉，避免被误判成非 JSON。
+    content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL)
     content = content.strip()
     if content.startswith("```"):
         content = re.sub(r"^```[a-zA-Z]*\s*", "", content)
@@ -163,6 +256,13 @@ def _parse_json(content: str) -> dict:
         return json.loads(content)
     except json.JSONDecodeError:
         pass
+    # 常见小毛病：尾随逗号、Markdown 残留，先修复再尝试解析。
+    repaired = re.sub(r",(\s*[}\]])", r"\1", content)
+    if repaired != content:
+        try:
+            return json.loads(repaired)
+        except json.JSONDecodeError:
+            pass
     match = re.search(r"\{.*\}", content, re.DOTALL)
     if match:
         try:

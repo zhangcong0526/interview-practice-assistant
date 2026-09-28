@@ -34,16 +34,51 @@ VALID_TYPES = ("single", "multiple", "judge")
 TYPE_LABELS = {"single": "单选题", "multiple": "多选题", "judge": "判断题"}
 MAX_MATERIAL_CHARS = 24_000
 MAX_REVIEW_SOURCE_CHARS = 2_400
+MAX_REVIEW_REFS_PER_TOPIC = 1
+MAX_REVIEW_REF_CHARS = 400
 MAX_QUESTIONS = 30
 QUIZ_LLM_BATCH_SIZE = 8
 QUIZ_FAST_SINGLE_CALL_LIMIT = 8
-REVIEW_BATCH_SIZE = 3
+
+
+def _minimax_provider() -> bool:
+    return str(getattr(settings, "llm_provider", "")) == "minimax"
+
+
+def _quiz_max_tokens() -> int:
+    if _minimax_provider():
+        try:
+            return max(2000, int(getattr(settings, "minimax_max_tokens", 16000)))
+        except (TypeError, ValueError):
+            return 16000
+    return 8000
+
+
+def _quiz_batch_size() -> int:
+    if _minimax_provider():
+        try:
+            return max(1, int(getattr(settings, "minimax_batch_size", 6)))
+        except (TypeError, ValueError):
+            return 6
+    return QUIZ_LLM_BATCH_SIZE
+
+
+def _resolve_review_channel() -> tuple[str | None, str | None]:
+    """复习模型不能把 A 厂商的 Model ID 传给 B 厂商的兼容接口。"""
+    if _minimax_provider():
+        if settings.deepseek_api_key:
+            return "deepseek", "deepseek-chat"
+        if settings.ark_api_key and settings.ark_model:
+            return "ark", settings.ark_model
+        return "minimax", None
+    return None, settings.review_model or None
+REVIEW_BATCH_SIZE = 2
 REVIEW_MAX_CONCURRENCY = 3
 REVIEW_LLM_ITEM_LIMIT = 8
-REVIEW_TIMEOUT_SECONDS = 40.0
-REVIEW_FALLBACK_BATCH_SIZE = 2
+REVIEW_TIMEOUT_SECONDS = 30.0
+REVIEW_FALLBACK_BATCH_SIZE = 1
 REVIEW_FALLBACK_CONCURRENCY = 3
-REVIEW_FALLBACK_TIMEOUT_SECONDS = 20.0
+REVIEW_FALLBACK_TIMEOUT_SECONDS = 15.0
 MASTERY_LEVEL_ORDER = {"beginner": 0, "developing": 1, "proficient": 2, "mastered": 3}
 # 连续两次答对即视为该知识点已回稳，可以移出错题本。
 MISTAKE_CLEAR_STREAK = 2
@@ -621,14 +656,45 @@ def _format_review_sources(sources: dict[str, list[dict]]) -> str:
     blocks: list[str] = []
     for topic, refs in sources.items():
         lines = [f"【知识点：{topic}】"]
-        for index, ref in enumerate(refs, start=1):
+        for index, ref in enumerate(refs[:MAX_REVIEW_REFS_PER_TOPIC], start=1):
             url = str(ref.get("url") or "").strip()
             suffix = f"（链接：{url}）" if url else ""
             lines.append(f"片段{index} · 《{ref.get('title', '')}》{suffix}")
-            lines.append(str(ref.get("text") or "").strip())
+            lines.append(str(ref.get("text") or "")[:MAX_REVIEW_REF_CHARS].strip())
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks)
 
+
+_EXPLANATION_BAD_PHRASES = (
+    "等等，",
+    "重新计算",
+    "重新审视",
+    "需要重新",
+    "调整题干",
+    "我们改",
+    "我们调整",
+    "我们采用",
+    "换个角度",
+    "选项中没有",
+    "但为了符合",
+)
+_EXPLANATION_BAD_REGEX = re.compile("|".join(_EXPLANATION_BAD_PHRASES))
+
+
+def _clean_explanation(text: str) -> str:
+    """展示用清洗：超长解析或包含模型自纠错短语时，截断到首个嫌疑词前。"""
+    raw = str(text or "")
+    if not raw:
+        return raw
+    if len(raw) > 800:
+        return "解析过长可能包含模型自纠错草稿，建议重做本题验证。"
+    match = _EXPLANATION_BAD_REGEX.search(raw)
+    if match:
+        cleaned = raw[: match.start()].rstrip()
+        if cleaned:
+            return cleaned
+        return "解析包含模型自纠错草稿，建议重做本题验证。"
+    return raw
 
 # --------------------------------------------------------------------------
 # 关键词
@@ -775,12 +841,13 @@ def _quiz_count_batches(counts: dict[str, int]) -> list[dict[str, int]]:
     while any(remaining.values()):
         batch = {qtype: 0 for qtype in VALID_TYPES}
         batch_total = 0
+        cap = _quiz_batch_size()
         for qtype in VALID_TYPES:
-            take = min(remaining[qtype], QUIZ_LLM_BATCH_SIZE - batch_total)
+            take = min(remaining[qtype], cap - batch_total)
             batch[qtype] = take
             batch_total += take
             remaining[qtype] -= take
-            if batch_total >= QUIZ_LLM_BATCH_SIZE:
+            if batch_total >= cap:
                 break
         batches.append(batch)
     return batches
@@ -802,6 +869,13 @@ def _request_quiz_raw_once(
     if settings.llm_provider == "ark" and settings.deepseek_api_key:
         quiz_provider = "deepseek"
         quiz_model = "deepseek-chat"
+    elif settings.llm_provider == "minimax":
+        if settings.deepseek_api_key:
+            quiz_provider = "deepseek"
+            quiz_model = "deepseek-chat"
+        elif settings.ark_api_key and settings.ark_model:
+            quiz_provider = "ark"
+            quiz_model = settings.ark_model
     return llm_service.chat_json(
         prompts.QUIZ_SYSTEM,
         prompts.build_quiz_user(
@@ -815,6 +889,7 @@ def _request_quiz_raw_once(
         ),
         provider=quiz_provider,
         model=quiz_model,
+        max_tokens=_quiz_max_tokens(),
     )
 
 
@@ -907,6 +982,24 @@ def _request_quiz_raw(
     )
 
 
+def _has_unreliable_explanation(explanation: str) -> bool:
+    """拦截命题模型把思考草稿写进 explanation 的坏题。"""
+    text = str(explanation or "")
+    if len(text) > 800:
+        return True
+    patterns = (
+        r"等等[，,、]",
+        r"(重新计算|重新审视|重新考虑)",
+        r"(题干|资料|解析|计算|推理)(可能|存在)?(有误|不完整|不一致)",
+        r"(调整|修改|更换)题干",
+        r"我们(改为|采用|调整|重新)",
+        r"换(一个|个)角度",
+        r"选项中(没有|不包含)",
+        r"(但|但为了)(为了)?(符合|匹配).{0,12}(用户|考过)",
+    )
+    return any(re.search(pattern, text) for pattern in patterns)
+
+
 def _normalise_question(item: dict, index: int, topic_catalog: dict | None = None) -> dict | None:
     qtype = str(item.get("type") or "").strip().lower()
     if qtype not in VALID_TYPES:
@@ -953,13 +1046,17 @@ def _normalise_question(item: dict, index: int, topic_catalog: dict | None = Non
     if difficulty not in ("easy", "medium", "hard"):
         difficulty = "medium"
 
+    explanation = str(item.get("explanation") or "").strip()
+    if len(explanation) < 60 or _has_unreliable_explanation(explanation):
+        return None
+
     return {
         "question_id": f"q{index}",
         "type": qtype,
         "stem": stem,
         "options": options,
         "answer": answer,
-        "explanation": str(item.get("explanation") or "").strip(),
+        "explanation": explanation,
         "topic": _canonical_topic(str(item.get("topic") or "未分类"), topic_catalog),
         "difficulty": difficulty,
         "source_title": str(item.get("source_title") or "").strip(),
@@ -1820,6 +1917,21 @@ def _merge_reviews(results: list[dict]) -> dict:
     return merged
 
 
+def _merge_local_coverage(merged: dict, coverage: dict) -> dict:
+    """本地覆盖层只补充模型未覆盖的知识点，避免通用兜底替换深度分析。"""
+    known = {
+        _normalise_topic_key(str(item.get("topic") or ""))
+        for item in merged.get("weak_topics") or []
+    }
+    coverage = dict(coverage)
+    coverage["weak_topics"] = [
+        item
+        for item in coverage.get("weak_topics") or []
+        if _normalise_topic_key(str(item.get("topic") or "")) not in known
+    ]
+    return _merge_reviews([merged, coverage])
+
+
 def _generate_review(
     graded: list[dict],
     score: float,
@@ -1830,6 +1942,7 @@ def _generate_review(
 ) -> dict:
     batches = _build_review_batches(graded, topic_stats, review_sources, history)
     overall_context = _build_review_context(graded)
+    review_provider, review_model = _resolve_review_channel()
 
     def call(batch: dict) -> dict:
         return llm_service.chat_json(
@@ -1842,8 +1955,10 @@ def _generate_review(
                 _format_review_sources(batch["sources"]),
                 overall_context,
             ),
-            max_tokens=2400,
+            max_tokens=1600,
             timeout=REVIEW_TIMEOUT_SECONDS,
+            provider=review_provider,
+            model=review_model,
         )
 
     if len(batches) == 1:
@@ -1872,7 +1987,7 @@ def _generate_review(
                 local = _build_local_review(
                     graded, score, accuracy, review_sources, topic_stats
                 )
-                return _merge_reviews([merged, local])
+                return _merge_local_coverage(merged, local)
             except llm_service.LlmError:
                 local = _build_local_review(
                     graded, score, accuracy, review_sources, topic_stats
@@ -1929,7 +2044,7 @@ def _generate_review(
             graded, score, accuracy, review_sources, topic_stats
         )
         coverage.pop("review_error", None)
-        merged = _merge_reviews([merged, coverage])
+        merged = _merge_local_coverage(merged, coverage)
 
     if errors:
         merged["review_error"] = (
@@ -1968,9 +2083,7 @@ def _build_local_review(
         by_topic.setdefault(topic, []).append(item)
 
     weak_topics: list[dict] = []
-    study_plan: list[dict] = []
     for topic, items in by_topic.items():
-        topic_label = TYPE_LABELS.get(items[0].get("type"), "题目") if items else "题目"
         first = items[0]
         wrong_options = "、".join(first.get("user_answer") or [])
         correct_options = "、".join(first.get("correct_answer") or [])
@@ -1991,27 +2104,10 @@ def _build_local_review(
                 "plain_summary": (
                     f"先把「{topic}」拆成：题目问了什么、正确答案为什么成立、你选的答案为什么不够完整。"
                 ),
-                "analogy": "",
-                "flow_steps": [
-                    "读题干，找出它实际考查的动作或判断标准。",
-                    "对照正确答案和题目解析，补齐关键条件。",
-                    "用自己的话复述一遍，再换题型重做验证。",
-                ],
                 "study_points": [
                     f"记住这组差异：你选「{wrong_options or '未作答'}」，正确是「{correct_options}」。",
                     explanation or "回到原文核对这道题对应的标准做法。",
                 ],
-                "next_actions": [
-                    f"重读「{topic}」对应的原文依据。",
-                    f"用不同{topic_label}换场景重做 {min(3, len(items) + 1)} 题。",
-                    "复述关键步骤后再检查是否还依赖答案提示。",
-                ],
-            }
-        )
-        study_plan.append(
-            {
-                "topic": topic,
-                "action": f"先用本地基础建议理解「{topic}」，稍后重试复习分析，再换题型巩固。",
             }
         )
 
@@ -2029,7 +2125,6 @@ def _build_local_review(
         "can_advance": accuracy >= 0.85,
         "advance_reason": "本地兜底建议只能保证基础覆盖，达到标准后再进入下一板块。",
         "weak_topics": weak_topics,
-        "study_plan": study_plan,
         "encouragement": "成绩已经保存；先用基础建议补齐错题，模型恢复后再拿完整分析。",
     }
 
@@ -2046,6 +2141,7 @@ def _run_review_calls(
 ) -> list[dict]:
     """并发执行复习批次；任一批次失败时整体抛错，由调用方决定是否保留部分结果。"""
     results: list[dict] = []
+    review_provider, review_model = _resolve_review_channel()
     with ThreadPoolExecutor(max_workers=max(1, concurrency)) as executor:
         futures = {
             executor.submit(
@@ -2061,6 +2157,8 @@ def _run_review_calls(
                 ),
                 max_tokens=max_tokens,
                 timeout=timeout,
+                provider=review_provider,
+                model=review_model,
             ): batch
             for batch in batches
         }
@@ -2489,6 +2587,8 @@ def list_mistakes(limit: int = 100) -> list[dict]:
             continue
         copied = dict(item)
         copied["topic"] = _canonical_topic(str(copied.get("topic") or "未分类"), catalog)
+        if "explanation" in copied:
+            copied["explanation"] = _clean_explanation(copied.get("explanation"))
         normalised.append(copied)
     return normalised[:limit]
 
@@ -2590,6 +2690,9 @@ def get_attempt(attempt_id: str) -> dict:
         question_copy["topic"] = _canonical_topic(
             str(question_copy.get("topic") or "未分类"),
             catalog,
+        )
+        question_copy["explanation"] = _clean_explanation(
+            question_copy.get("explanation")
         )
         copied["questions"].append(question_copy)
     review = dict(copied.get("review") or {})

@@ -369,8 +369,7 @@ def _collect_review_sources(
 ) -> dict[str, list[dict]]:
     """为复习指引检索原文片段，避免建议脱离用户上传的知识库。"""
     topic_stats = topic_stats or {}
-    wanted: list[tuple[str, str]] = []
-    seen_topics: set[str] = set()
+    wanted: dict[str, list[str]] = {}
 
     for item in graded:
         topic = str(item.get("topic") or "未分类").strip() or "未分类"
@@ -381,17 +380,27 @@ def _collect_review_sources(
             accuracy = 1.0
         if item.get("is_correct") and accuracy >= 0.8:
             continue
-        if topic in seen_topics:
+        source_title = str(item.get("source_title") or "").strip()
+        titles = wanted.setdefault(topic, [])
+        if source_title and source_title not in titles:
+            titles.append(source_title)
+
+    # 历史错题可能来自同一知识点的其他文档。这里只合并来源标题，
+    # 不直接拿历史题干，避免复习步骤被旧题目带偏。
+    for mistake in list_mistakes(limit=10_000):
+        topic = str(mistake.get("topic") or "").strip()
+        if topic not in wanted:
             continue
-        seen_topics.add(topic)
-        wanted.append((topic, str(item.get("source_title") or "").strip()))
+        source_title = str(mistake.get("source_title") or "").strip()
+        titles = wanted[topic]
+        if source_title and source_title not in titles:
+            titles.append(source_title)
 
     sources: dict[str, list[dict]] = {}
-    for topic, source_title in wanted:
-        search_queries = []
-        if source_title:
+    for topic, source_titles in wanted.items():
+        search_queries = [topic]
+        for source_title in source_titles:
             search_queries.append(f"{source_title} {topic}")
-        search_queries.append(topic)
 
         hits: list[dict] = []
         seen_chunks: set[str] = set()
@@ -407,27 +416,35 @@ def _collect_review_sources(
                 seen_chunks.add(chunk_id)
                 hits.append(hit)
 
-        # 题目标注的 source_title 优先。找不到原文档时才允许用其他资料兜底，
-        # 这样提示里能明确区分“原文可加强”和“原文档需要补充”。
-        if source_title:
-            title_key = _title_key(source_title)
-            matched = [
-                hit for hit in hits
-                if _title_key(str(hit.get("title") or "")) == title_key
-            ]
-            if matched:
-                hits = matched
+        # 已知来源文档的片段排前面，但不再把其他文档过滤掉。
+        # 这样同一知识点在多份文档里交叉出现时，复习建议能同时引用。
+        title_keys = {_title_key(title) for title in source_titles if title}
+        ranked_hits = sorted(
+            enumerate(hits),
+            key=lambda pair: (
+                _title_key(str(pair[1].get("title") or "")) not in title_keys,
+                pair[0],
+            ),
+        )
+        hits = [hit for _, hit in ranked_hits]
 
         selected: list[dict] = []
         used_chars = 0
-        for hit in hits:
+        selected_ids: set[str] = set()
+
+        def append_ref(hit: dict) -> bool:
+            nonlocal used_chars
+            chunk_id = str(hit.get("chunk_id") or "")
+            if chunk_id in selected_ids:
+                return False
             text = str(hit.get("text") or "").strip()
             if not text:
-                continue
+                return False
             text = text[:700]
             if used_chars + len(text) > MAX_REVIEW_SOURCE_CHARS:
-                break
+                return False
             used_chars += len(text)
+            selected_ids.add(chunk_id)
             selected.append(
                 {
                     "title": str(hit.get("title") or "知识库文档"),
@@ -435,8 +452,24 @@ def _collect_review_sources(
                     "url": str(hit.get("source_url") or "").strip(),
                 }
             )
+            return True
+
+        # 先每个文档取一个最相关片段，再按相关度补足剩余名额，
+        # 避免同一份文档把全部引用占满。
+        first_seen_titles: set[str] = set()
+        for hit in hits:
+            title = str(hit.get("title") or "知识库文档")
+            if title in first_seen_titles:
+                continue
+            if append_ref(hit):
+                first_seen_titles.add(title)
             if len(selected) >= 3:
                 break
+
+        for hit in hits:
+            if len(selected) >= 3:
+                break
+            append_ref(hit)
 
         if selected:
             sources[topic] = selected

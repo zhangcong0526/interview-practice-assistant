@@ -33,13 +33,16 @@ TOPICS_FILE = QUIZ_DIR / "topics.json"
 VALID_TYPES = ("single", "multiple", "judge")
 TYPE_LABELS = {"single": "单选题", "multiple": "多选题", "judge": "判断题"}
 MAX_MATERIAL_CHARS = 24_000
-MAX_REVIEW_SOURCE_CHARS = 3_600
+MAX_REVIEW_SOURCE_CHARS = 2_400
 MAX_QUESTIONS = 30
 QUIZ_LLM_BATCH_SIZE = 8
 QUIZ_FAST_SINGLE_CALL_LIMIT = 8
-REVIEW_BATCH_SIZE = 6
+REVIEW_BATCH_SIZE = 4
 REVIEW_MAX_CONCURRENCY = 2
-REVIEW_TIMEOUT_SECONDS = 75.0
+REVIEW_TIMEOUT_SECONDS = 60.0
+REVIEW_FALLBACK_BATCH_SIZE = 2
+REVIEW_FALLBACK_CONCURRENCY = 3
+REVIEW_FALLBACK_TIMEOUT_SECONDS = 35.0
 MASTERY_LEVEL_ORDER = {"beginner": 0, "developing": 1, "proficient": 2, "mastered": 3}
 # 连续两次答对即视为该知识点已回稳，可以移出错题本。
 MISTAKE_CLEAR_STREAK = 2
@@ -1803,8 +1806,6 @@ def _generate_review(
 ) -> dict:
     batches = _build_review_batches(graded, topic_stats, review_sources, history)
     overall_context = _build_review_context(graded)
-    results: list[dict] = []
-    errors: list[str] = []
 
     def call(batch: dict) -> dict:
         return llm_service.chat_json(
@@ -1822,7 +1823,31 @@ def _generate_review(
         )
 
     if len(batches) == 1:
-        return call(batches[0])
+        try:
+            return call(batches[0])
+        except llm_service.LlmError as exc:
+            fallback_batches = _split_review_batches(batches[0])
+            if len(fallback_batches) <= 1:
+                raise
+            try:
+                fallback_results = _run_review_calls(
+                    fallback_batches,
+                    score,
+                    accuracy,
+                    overall_context,
+                    max_tokens=1200,
+                    timeout=REVIEW_FALLBACK_TIMEOUT_SECONDS,
+                    concurrency=REVIEW_FALLBACK_CONCURRENCY,
+                )
+                merged = _merge_reviews(fallback_results)
+                merged["review_error"] = f"完整复习建议超时，已保留拆分后的部分建议：{exc}"
+                return merged
+            except llm_service.LlmError:
+                raise exc from None
+
+    results: list[dict] = []
+    errors: list[str] = []
+    failed_batches: list[dict] = []
 
     with ThreadPoolExecutor(max_workers=REVIEW_MAX_CONCURRENCY) as executor:
         futures = {executor.submit(call, batch): index for index, batch in enumerate(batches)}
@@ -1831,6 +1856,28 @@ def _generate_review(
                 results.append(future.result())
             except llm_service.LlmError as exc:
                 errors.append(str(exc))
+                failed_batches.append(batches[futures[future]])
+
+    if failed_batches:
+        fallback_batches = [
+            small_batch
+            for batch in failed_batches
+            for small_batch in _split_review_batches(batch)
+        ]
+        try:
+            fallback_results = _run_review_calls(
+                fallback_batches,
+                score,
+                accuracy,
+                overall_context,
+                max_tokens=1200,
+                timeout=REVIEW_FALLBACK_TIMEOUT_SECONDS,
+                concurrency=REVIEW_FALLBACK_CONCURRENCY,
+            )
+            results.extend(fallback_results)
+            errors = []
+        except llm_service.LlmError as fallback_exc:
+            errors = [str(fallback_exc)]
 
     if not results:
         raise llm_service.LlmError(errors[0] if errors else "复习建议生成失败。")
@@ -1841,6 +1888,53 @@ def _generate_review(
             f"部分复习建议批次失败，已保留成功部分：{errors[0]}"
         )
     return merged
+
+
+def _split_review_batches(batch: dict) -> list[dict]:
+    items = batch.get("items") or []
+    return [
+        {
+            "items": items[offset : offset + REVIEW_FALLBACK_BATCH_SIZE],
+            "history": batch.get("history") or [],
+            "sources": batch.get("sources") or {},
+        }
+        for offset in range(0, len(items), REVIEW_FALLBACK_BATCH_SIZE)
+    ]
+
+
+def _run_review_calls(
+    batches: list[dict],
+    score: float,
+    accuracy: float,
+    overall_context: str,
+    *,
+    max_tokens: int,
+    timeout: float,
+    concurrency: int,
+) -> list[dict]:
+    """并发执行复习批次；任一批次失败时整体抛错，由调用方决定是否保留部分结果。"""
+    results: list[dict] = []
+    with ThreadPoolExecutor(max_workers=max(1, concurrency)) as executor:
+        futures = {
+            executor.submit(
+                llm_service.chat_json,
+                prompts.REVIEW_SYSTEM,
+                prompts.build_review_user(
+                    batch["items"],
+                    score,
+                    accuracy,
+                    batch.get("history") or [],
+                    _format_review_sources(batch.get("sources") or {}),
+                    overall_context,
+                ),
+                max_tokens=max_tokens,
+                timeout=timeout,
+            ): batch
+            for batch in batches
+        }
+        for future in as_completed(futures):
+            results.append(future.result())
+    return results
 
 
 def grade(paper_id: str, answers: dict[str, list[str]]) -> dict:

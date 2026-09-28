@@ -311,17 +311,31 @@ def _ensure_mastery_schema() -> dict:
 # --------------------------------------------------------------------------
 
 
-def _collect_material(keywords: list[str], doc_ids: list[str], per_keyword: int = 4) -> tuple[str, list[str]]:
+def _collect_material(
+    keywords: list[str], doc_ids: list[str], per_keyword: int = 4
+) -> tuple[str, list[str], list[dict]]:
     """按关键词检索知识库片段，拼成命题资料。
 
     没有关键词时退化为使用指定文档（或全部文档）的开头内容。
+    同时返回引用文档元数据，供错题本回溯原始出处。
     """
     used_titles: list[str] = []
+    used_docs: list[dict] = []
+    doc_by_id: dict[str, dict] = {}
     blocks: list[str] = []
     seen_chunks: set[str] = set()
     budget = MAX_MATERIAL_CHARS
 
-    def push(title: str, text: str, chunk_id: str) -> None:
+    def remember_doc(doc_id: str, title: str) -> None:
+        if not doc_id:
+            return
+        if doc_id not in doc_by_id:
+            doc_by_id[doc_id] = {"doc_id": doc_id, "title": title}
+            used_docs.append(doc_by_id[doc_id])
+        if title and title not in used_titles:
+            used_titles.append(title)
+
+    def push(title: str, text: str, chunk_id: str, doc_id: str = "") -> None:
         nonlocal budget
         if chunk_id in seen_chunks or budget <= 0:
             return
@@ -329,8 +343,7 @@ def _collect_material(keywords: list[str], doc_ids: list[str], per_keyword: int 
         snippet = text[:budget]
         blocks.append(f"[资料来源：{title}]\n{snippet}")
         budget -= len(snippet)
-        if title not in used_titles:
-            used_titles.append(title)
+        remember_doc(doc_id, title)
 
     doc_filter = set(doc_ids or [])
 
@@ -338,7 +351,7 @@ def _collect_material(keywords: list[str], doc_ids: list[str], per_keyword: int 
         for hit in knowledge_service.search(keyword, per_keyword):
             if doc_filter and hit["doc_id"] not in doc_filter:
                 continue
-            push(hit["title"], hit["text"], hit["chunk_id"])
+            push(hit["title"], hit["text"], hit["chunk_id"], hit["doc_id"])
 
     if not blocks:
         for doc in knowledge_service.list_documents():
@@ -346,9 +359,9 @@ def _collect_material(keywords: list[str], doc_ids: list[str], per_keyword: int 
                 continue
             full = _load_document_text(doc["doc_id"])
             if full:
-                push(doc["title"], full, doc["doc_id"])
+                push(doc["title"], full, doc["doc_id"], doc["doc_id"])
 
-    return "\n\n".join(blocks), used_titles
+    return "\n\n".join(blocks), used_titles, used_docs
 
 
 def _load_document_text(doc_id: str) -> str:
@@ -357,6 +370,20 @@ def _load_document_text(doc_id: str) -> str:
     if not doc:
         return ""
     return "\n\n".join(doc.get("chunks") or [])
+
+
+def _ranked_doc_chunks(doc: dict, topic: str, max_chunks: int = 2) -> list[tuple[int, str]]:
+    """从来源文档中挑与知识点最相关的片段；无命中时按文档顺序兜底。"""
+    terms = [t for t in re.split(r"[\s/、，,;；()（）·]+", topic or "") if len(t) >= 2]
+    scored: list[tuple[int, int, str]] = []
+    for index, text in enumerate(doc.get("chunks") or []):
+        text = str(text or "")
+        if not text:
+            continue
+        score = sum(text.count(term) for term in terms)
+        scored.append((-score, index, text))
+    scored.sort(key=lambda entry: (entry[0], entry[1]))
+    return [(index, text) for _, index, text in scored[:max_chunks]]
 
 
 def _title_key(title: str) -> str:
@@ -370,6 +397,27 @@ def _collect_review_sources(
     """为复习指引检索原文片段，避免建议脱离用户上传的知识库。"""
     topic_stats = topic_stats or {}
     wanted: dict[str, list[str]] = {}
+    lineage_docs: dict[str, list[dict]] = {}
+    docs_by_title = _knowledge_docs_by_title()
+
+    def add_lineage(topic: str, docs) -> None:
+        known = lineage_docs.setdefault(topic, [])
+        known_ids = {doc["doc_id"] for doc in known}
+        for doc in docs or []:
+            doc_id = str((doc or {}).get("doc_id") or "").strip()
+            title = str((doc or {}).get("title") or "").strip()
+            matched = docs_by_title.get(_title_key(title)) if title else None
+            if not doc_id and matched:
+                doc_id = str(matched.get("doc_id") or "")
+            if not doc_id or doc_id in known_ids:
+                continue
+            known_ids.add(doc_id)
+            known.append(
+                {
+                    "doc_id": doc_id,
+                    "title": title or str((matched or {}).get("title") or ""),
+                }
+            )
 
     for item in graded:
         topic = str(item.get("topic") or "未分类").strip() or "未分类"
@@ -384,6 +432,10 @@ def _collect_review_sources(
         titles = wanted.setdefault(topic, [])
         if source_title and source_title not in titles:
             titles.append(source_title)
+        add_lineage(
+            topic,
+            [{"doc_id": item.get("source_doc_id") or "", "title": source_title}],
+        )
 
     # 历史错题可能来自同一知识点的其他文档。这里只合并来源标题，
     # 不直接拿历史题干，避免复习步骤被旧题目带偏。
@@ -395,6 +447,7 @@ def _collect_review_sources(
         titles = wanted[topic]
         if source_title and source_title not in titles:
             titles.append(source_title)
+        add_lineage(topic, mistake.get("source_docs"))
 
     sources: dict[str, list[dict]] = {}
     for topic, source_titles in wanted.items():
@@ -404,6 +457,29 @@ def _collect_review_sources(
 
         hits: list[dict] = []
         seen_chunks: set[str] = set()
+
+        # 老错题补齐过文档线索后，直接读原文档片段，避免搜索匹配不到出处。
+        for doc in lineage_docs.get(topic, []):
+            loaded = knowledge_service.load_document(doc["doc_id"])
+            if not loaded:
+                continue
+            doc_title = str(loaded.get("title") or doc.get("title") or "")
+            source_url = str(loaded.get("source_url") or "")
+            for index, text in _ranked_doc_chunks(loaded, topic):
+                chunk_id = f"{doc['doc_id']}-{index}"
+                if chunk_id in seen_chunks:
+                    continue
+                seen_chunks.add(chunk_id)
+                hits.append(
+                    {
+                        "chunk_id": chunk_id,
+                        "doc_id": doc["doc_id"],
+                        "title": doc_title,
+                        "source_url": source_url,
+                        "text": text,
+                    }
+                )
+
         for query in search_queries:
             try:
                 results = knowledge_service.search(query, limit=6)
@@ -843,7 +919,7 @@ def generate_paper(
     if total > MAX_QUESTIONS:
         raise QuizError(f"单份试卷最多 {MAX_QUESTIONS} 道题。")
 
-    material, used_titles = _collect_material(keywords, doc_ids or [])
+    material, used_titles, used_docs = _collect_material(keywords, doc_ids or [])
     if not material.strip():
         raise QuizError("没有检索到相关资料，请更换关键词或先导入知识库文档。")
 
@@ -962,6 +1038,13 @@ def generate_paper(
         question["question_id"] = f"q{index}"
         questions.append(question)
 
+    used_doc_map = {_title_key(doc["title"]): doc for doc in used_docs if doc.get("title")}
+    for question in questions:
+        matched = used_doc_map.get(_title_key(question.get("source_title") or ""))
+        if matched:
+            question["source_doc_id"] = matched["doc_id"]
+            question["source_docs"] = [dict(matched)]
+
     paper_id = uuid.uuid4().hex
     title = raw_title
     if not title:
@@ -972,6 +1055,8 @@ def generate_paper(
         "title": title,
         "keywords": keywords,
         "doc_titles": used_titles,
+        "doc_ids": [doc["doc_id"] for doc in used_docs],
+        "source_docs": used_docs,
         "difficulty": difficulty,
         "questions": questions,
         "created_at": int(time.time()),
@@ -1687,9 +1772,28 @@ def _update_mistakes(graded: list[dict], paper: dict) -> None:
     by_key = {item["key"]: item for item in mistakes if isinstance(item, dict) and "key" in item}
     now = int(time.time())
 
+    paper_docs = _mistake_paper_docs(paper)
+
     for item in graded:
         key = item["stem"][:120]
         existing = by_key.get(key)
+        source_key = _title_key(item.get("source_title") or "")
+        source_doc_id = ""
+        for doc in paper_docs:
+            if doc.get("doc_id") and _title_key(doc.get("title") or "") == source_key:
+                source_doc_id = doc["doc_id"]
+                break
+        lineage = {
+            "paper_id": str(paper.get("paper_id") or ""),
+            "source_doc_id": source_doc_id,
+            "source_docs": (
+                [{"doc_id": source_doc_id, "title": item.get("source_title", "")}]
+                if source_doc_id
+                else []
+            ),
+            "paper_doc_ids": [doc["doc_id"] for doc in paper_docs if doc.get("doc_id")],
+            "paper_doc_titles": [doc["title"] for doc in paper_docs if doc.get("title")],
+        }
         if item["is_correct"]:
             if existing:
                 existing["correct_streak"] = existing.get("correct_streak", 0) + 1
@@ -1703,6 +1807,9 @@ def _update_mistakes(graded: list[dict], paper: dict) -> None:
             existing["correct_streak"] = 0
             existing["last_seen_at"] = now
             existing["user_answer_text"] = item["user_answer_text"]
+            for field, value in lineage.items():
+                if not existing.get(field):
+                    existing[field] = value
             continue
 
         by_key[key] = {
@@ -1717,6 +1824,7 @@ def _update_mistakes(graded: list[dict], paper: dict) -> None:
             "explanation": item.get("explanation", ""),
             "source_title": item.get("source_title", ""),
             "paper_title": paper.get("title", ""),
+            **lineage,
             "wrong_count": 1,
             "correct_streak": 0,
             "created_at": now,
@@ -1731,13 +1839,117 @@ def _update_mistakes(graded: list[dict], paper: dict) -> None:
     _write_json(MISTAKES_FILE, ordered)
 
 
-def list_mistakes(limit: int = 100) -> list[dict]:
-    mistakes = _read_json(MISTAKES_FILE, [])
-    if not isinstance(mistakes, list):
+def _mistake_paper_docs(paper: dict | None) -> list[dict]:
+    """从试卷中整理引用文档线索，兼容只有 doc_titles 的老试卷。"""
+    if not isinstance(paper, dict):
         return []
+    paper_docs = [
+        {"doc_id": str(doc.get("doc_id") or ""), "title": str(doc.get("title") or "")}
+        for doc in paper.get("source_docs") or []
+        if isinstance(doc, dict) and (doc.get("doc_id") or doc.get("title"))
+    ]
+    if paper_docs:
+        return paper_docs
+    doc_titles = [str(title) for title in paper.get("doc_titles") or [] if title]
+    doc_ids = [str(doc_id) for doc_id in paper.get("doc_ids") or []]
+    return [
+        {"doc_id": doc_ids[index] if index < len(doc_ids) else "", "title": title}
+        for index, title in enumerate(doc_titles)
+    ]
+
+
+def _knowledge_docs_by_title() -> dict[str, dict]:
+    docs_by_title: dict[str, dict] = {}
+    try:
+        for doc in knowledge_service.list_documents():
+            docs_by_title[_title_key(doc.get("title") or "")] = doc
+    except Exception:
+        pass
+    return docs_by_title
+
+
+def _papers_by_title() -> dict[str, dict]:
+    papers_by_title: dict[str, dict] = {}
+    if PAPERS_DIR.exists():
+        for path in PAPERS_DIR.glob("*.json"):
+            paper = _read_json(path, None)
+            if isinstance(paper, dict) and paper.get("title"):
+                papers_by_title.setdefault(_title_key(str(paper["title"])), paper)
+    return papers_by_title
+
+
+def _backfill_mistake_lineage(
+    item: dict,
+    docs_by_title: dict[str, dict],
+    papers_by_title: dict[str, dict],
+) -> None:
+    """为历史错题补充来源文档线索；只新增字段，不改动既有数据。"""
+    item["lineage_backfilled"] = True
+    paper = papers_by_title.get(_title_key(item.get("paper_title") or ""))
+    paper_docs = _mistake_paper_docs(paper)
+
+    if not item.get("paper_id") and isinstance(paper, dict) and paper.get("paper_id"):
+        item["paper_id"] = str(paper["paper_id"])
+    if not item.get("paper_doc_ids"):
+        ids = [doc["doc_id"] for doc in paper_docs if doc.get("doc_id")]
+        if ids:
+            item["paper_doc_ids"] = ids
+    if not item.get("paper_doc_titles"):
+        titles = [doc["title"] for doc in paper_docs if doc.get("title")]
+        if titles:
+            item["paper_doc_titles"] = titles
+
+    source_key = _title_key(item.get("source_title") or "")
+    source_doc = docs_by_title.get(source_key) if source_key else None
+    if not item.get("source_doc_id") and source_doc:
+        item["source_doc_id"] = str(source_doc.get("doc_id") or "")
+    if not item.get("source_doc_id"):
+        for doc in paper_docs:
+            if doc.get("doc_id") and _title_key(doc.get("title") or "") == source_key:
+                item["source_doc_id"] = doc["doc_id"]
+                break
+
+    if not item.get("source_docs"):
+        doc_id = str(item.get("source_doc_id") or "")
+        if doc_id:
+            item["source_docs"] = [
+                {
+                    "doc_id": doc_id,
+                    "title": str(
+                        (source_doc or {}).get("title")
+                        or item.get("source_title")
+                        or ""
+                    ),
+                }
+            ]
+        elif paper_docs:
+            # 老数据无法精确定位来源时，退化为原试卷引用过的全部文档。
+            item["source_docs"] = list(paper_docs)
+
+
+def _load_mistakes() -> list[dict]:
+    """读取错题列表，并为缺少来源线索的老数据按需补齐（只加字段）。"""
+    mistakes = _read_json(MISTAKES_FILE, [])
+    if not isinstance(mistakes, list) or not mistakes:
+        return mistakes if isinstance(mistakes, list) else []
+    if all(
+        isinstance(item, dict) and item.get("lineage_backfilled")
+        for item in mistakes
+    ):
+        return mistakes
+
+    docs_by_title = _knowledge_docs_by_title()
+    papers_by_title = _papers_by_title()
+    for item in mistakes:
+        if isinstance(item, dict):
+            _backfill_mistake_lineage(item, docs_by_title, papers_by_title)
+    return mistakes
+
+
+def list_mistakes(limit: int = 100) -> list[dict]:
     catalog = _topic_catalog()
     normalised = []
-    for item in mistakes:
+    for item in _load_mistakes():
         if not isinstance(item, dict):
             continue
         copied = dict(item)

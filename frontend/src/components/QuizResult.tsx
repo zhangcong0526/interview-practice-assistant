@@ -552,10 +552,24 @@ export function QuizResult({
                 {index + 1}. {item.stem}
               </p>
 
+              {!item.is_correct && (
+                <p className="mt-1.5 text-xs leading-5 text-zinc-600">
+                  你的答案：{item.user_answer.join('、') || '未作答'} ·
+                  正确答案：{item.correct_answer.join('、')}
+                </p>
+              )}
+
               <ul className="mt-2.5 space-y-1.5">
                 {item.options.map((option) => {
                   const isCorrect = item.correct_answer.includes(option.key)
                   const isPicked = item.user_answer.includes(option.key)
+                  const optionStatus = isCorrect
+                    ? isPicked
+                      ? '你的选择 · 正确'
+                      : '漏选'
+                    : isPicked
+                      ? '误选'
+                      : ''
                   return (
                     <li
                       key={option.key}
@@ -572,10 +586,14 @@ export function QuizResult({
                       </span>
                       <span className="min-w-0 flex-1">{option.text}</span>
                       {isCorrect && (
-                        <span className="shrink-0 text-xs font-medium text-emerald-700">正确答案</span>
+                        <span className="shrink-0 text-xs font-medium text-emerald-700">
+                          {optionStatus}
+                        </span>
                       )}
-                      {isPicked && !isCorrect && (
-                        <span className="shrink-0 text-xs font-medium text-red-700">你的选择</span>
+                      {!isCorrect && isPicked && (
+                        <span className="shrink-0 text-xs font-medium text-red-700">
+                          {optionStatus}
+                        </span>
                       )}
                     </li>
                   )

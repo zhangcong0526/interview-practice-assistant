@@ -222,6 +222,7 @@ export function QuizSetup({
 
   const total = single + multiple + judge
   const overLimit = total > MAX_TOTAL_QUESTIONS
+  const showNormalQuizSetup = !mistakePanelOpen
 
   const handleGenerate = async () => {
     if (selected.length === 0 || busy) return
@@ -288,7 +289,6 @@ export function QuizSetup({
           time_range: mistakeTimeRange,
           topics: selectedMistakeTopics,
           total: mistakeTotal,
-          difficulty,
         }),
       )
     } catch (generateError) {
@@ -358,20 +358,22 @@ export function QuizSetup({
               {busy === 'mistake-all' ? '正在生成重练卷' : '自定义错题重练'}
             </button>
           )}
-          <button
-            type="button"
-            className="secondary-btn px-3 py-2 text-xs"
-            onClick={() => void loadTopics(true)}
-            disabled={loadingTopics || Boolean(busy)}
-            title="重新从知识库提炼关键词"
-          >
-            {loadingTopics ? (
-              <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
-            ) : (
-              <RefreshCw className="size-3.5" aria-hidden="true" />
-            )}
-            重新提炼
-          </button>
+          {showNormalQuizSetup && (
+            <button
+              type="button"
+              className="secondary-btn px-3 py-2 text-xs"
+              onClick={() => void loadTopics(true)}
+              disabled={loadingTopics || Boolean(busy)}
+              title="重新从知识库提炼关键词"
+            >
+              {loadingTopics ? (
+                <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+              ) : (
+                <RefreshCw className="size-3.5" aria-hidden="true" />
+              )}
+              重新提炼
+            </button>
+          )}
         </div>
       </div>
 
@@ -481,7 +483,7 @@ export function QuizSetup({
         </div>
       )}
 
-      {documents.length > 1 && (
+      {showNormalQuizSetup && documents.length > 1 && (
         <div className="mt-4">
           <span className="field-label">资料范围</span>
           <ul className="flex flex-wrap gap-1.5">
@@ -511,7 +513,8 @@ export function QuizSetup({
         </div>
       )}
 
-      <div className="mt-4">
+      {showNormalQuizSetup && (
+        <div className="mt-4">
         <label htmlFor="topic-filter" className="field-label">
           知识点关键词
         </label>
@@ -528,14 +531,15 @@ export function QuizSetup({
             placeholder="筛选关键词或板块"
           />
         </div>
-      </div>
+        </div>
+      )}
 
-      {loadingTopics && topics.length === 0 ? (
+      {showNormalQuizSetup && loadingTopics && topics.length === 0 ? (
         <p className="mt-4 flex items-center gap-2 text-sm text-zinc-500">
           <Loader2 className="size-4 animate-spin" aria-hidden="true" />
           正在从知识库提炼知识点
         </p>
-      ) : (
+      ) : showNormalQuizSetup ? (
         <div className="mt-3 max-h-72 space-y-4 overflow-y-auto rounded-lg border border-zinc-200 bg-zinc-50 p-3">
           {grouped.length === 0 && (
             <p className="text-sm text-zinc-500">没有匹配的关键词。</p>
@@ -580,95 +584,105 @@ export function QuizSetup({
             )
           })}
         </div>
+      ) : null}
+
+      {showNormalQuizSetup && (
+        <div className="mt-4 grid grid-cols-3 gap-3">
+          <div>
+            <label htmlFor="count-single" className="field-label">
+              单选题
+            </label>
+            <input
+              id="count-single"
+              type="number"
+              min={0}
+              max={MAX_TOTAL_QUESTIONS}
+              className="text-input"
+              value={single}
+              onChange={(event) => setSingle(Number(event.target.value) || 0)}
+            />
+          </div>
+          <div>
+            <label htmlFor="count-multiple" className="field-label">
+              多选题
+            </label>
+            <input
+              id="count-multiple"
+              type="number"
+              min={0}
+              max={MAX_TOTAL_QUESTIONS}
+              className="text-input"
+              value={multiple}
+              onChange={(event) => setMultiple(Number(event.target.value) || 0)}
+            />
+          </div>
+          <div>
+            <label htmlFor="count-judge" className="field-label">
+              判断题
+            </label>
+            <input
+              id="count-judge"
+              type="number"
+              min={0}
+              max={MAX_TOTAL_QUESTIONS}
+              className="text-input"
+              value={judge}
+              onChange={(event) => setJudge(Number(event.target.value) || 0)}
+            />
+          </div>
+        </div>
       )}
 
-      <div className="mt-4 grid grid-cols-3 gap-3">
-        <div>
-          <label htmlFor="count-single" className="field-label">
-            单选题
-          </label>
-          <input
-            id="count-single"
-            type="number"
-            min={0}
-            max={MAX_TOTAL_QUESTIONS}
-            className="text-input"
-            value={single}
-            onChange={(event) => setSingle(Number(event.target.value) || 0)}
-          />
-        </div>
-        <div>
-          <label htmlFor="count-multiple" className="field-label">
-            多选题
-          </label>
-          <input
-            id="count-multiple"
-            type="number"
-            min={0}
-            max={MAX_TOTAL_QUESTIONS}
-            className="text-input"
-            value={multiple}
-            onChange={(event) => setMultiple(Number(event.target.value) || 0)}
-          />
-        </div>
-        <div>
-          <label htmlFor="count-judge" className="field-label">
-            判断题
-          </label>
-          <input
-            id="count-judge"
-            type="number"
-            min={0}
-            max={MAX_TOTAL_QUESTIONS}
-            className="text-input"
-            value={judge}
-            onChange={(event) => setJudge(Number(event.target.value) || 0)}
-          />
-        </div>
-      </div>
+      {showNormalQuizSetup && (
+        <p className={`mt-2 text-xs ${overLimit ? 'font-medium text-red-600' : 'text-zinc-500'}`}>
+          共 {total} 道，一次最多 {MAX_TOTAL_QUESTIONS} 道（默认 20 道：单选 10 · 多选 6 · 判断 4）
+          {overLimit ? '，请调低题数' : ''}
+        </p>
+      )}
 
-      <p className={`mt-2 text-xs ${overLimit ? 'font-medium text-red-600' : 'text-zinc-500'}`}>
-        共 {total} 道，一次最多 {MAX_TOTAL_QUESTIONS} 道（默认 20 道：单选 10 · 多选 6 · 判断 4）
-        {overLimit ? '，请调低题数' : ''}
-      </p>
-
-      <div className="mt-4">
-        <span className="field-label">难度</span>
-        <div className="inline-flex rounded-lg border border-zinc-300 bg-zinc-100 p-1">
-          {DIFFICULTIES.map((item) => (
-            <button
-              key={item.value}
-              type="button"
-              className={`rounded-md px-4 py-1.5 text-sm font-medium transition ${
-                difficulty === item.value
-                  ? 'bg-white text-zinc-900 shadow-sm'
-                  : 'text-zinc-500 hover:text-zinc-700'
-              }`}
-              onClick={() => setDifficulty(item.value)}
-            >
-              {item.label}
-            </button>
-          ))}
+      {showNormalQuizSetup && (
+        <div className="mt-4">
+          <span className="field-label">难度</span>
+          <div className="inline-flex rounded-lg border border-zinc-300 bg-zinc-100 p-1">
+            {DIFFICULTIES.map((item) => (
+              <button
+                key={item.value}
+                type="button"
+                className={`rounded-md px-4 py-1.5 text-sm font-medium transition ${
+                  difficulty === item.value
+                    ? 'bg-white text-zinc-900 shadow-sm'
+                    : 'text-zinc-500 hover:text-zinc-700'
+                }`}
+                onClick={() => setDifficulty(item.value)}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
-      {error && <p className="mt-3 text-sm leading-5 text-red-600">{error}</p>}
+      {error && mistakePanelOpen && (
+        <p className="mt-3 text-sm leading-5 text-red-600">{error}</p>
+      )}
 
-      <button
-        type="button"
-        className="primary-btn mt-4 w-full py-3"
-        onClick={handleGenerate}
-        disabled={selected.length === 0 || total < 1 || overLimit || Boolean(busy)}
-      >
-        {busy === 'generate' ? (
-          <Loader2 className="size-5 animate-spin" aria-hidden="true" />
-        ) : (
-          <FilePlus2 className="size-5" aria-hidden="true" />
-        )}
-        {busy === 'generate'
-          ? '正在依据资料命题'
-          : `生成试卷（已选 ${selected.length} 个知识点 · ${total} 道题）`}
-      </button>
+      {showNormalQuizSetup && (
+        <button
+          type="button"
+          className="primary-btn mt-4 w-full py-3"
+          onClick={handleGenerate}
+          disabled={selected.length === 0 || total < 1 || overLimit || Boolean(busy)}
+        >
+          {busy === 'generate' ? (
+            <Loader2 className="size-5 animate-spin" aria-hidden="true" />
+          ) : (
+            <FilePlus2 className="size-5" aria-hidden="true" />
+          )}
+          {busy === 'generate'
+            ? '正在依据资料命题'
+            : `生成试卷（已选 ${selected.length} 个知识点 · ${total} 道题）`}
+        </button>
+      )}
     </section>
   )
 }

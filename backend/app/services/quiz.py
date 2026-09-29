@@ -1404,6 +1404,19 @@ def generate_paper(
                 if chunk.get("doc_id") == matched["doc_id"]
             ]
 
+    # used_docs 是命题候选材料；试卷头必须只展示最终入选题目实际依据的文档，
+    # 避免用户看到“来源混入了其他文档”的误导。
+    question_doc_ids = {
+        str(question.get("source_doc_id") or "")
+        for question in questions
+        if question.get("source_doc_id")
+    }
+    actual_docs = [doc for doc in used_docs if doc.get("doc_id") in question_doc_ids]
+    actual_titles = [doc["title"] for doc in actual_docs if doc.get("title")]
+    actual_chunks = [
+        chunk for chunk in used_chunks if chunk.get("doc_id") in question_doc_ids
+    ]
+
     paper_id = uuid.uuid4().hex
     title = raw_title
     if not title:
@@ -1413,10 +1426,10 @@ def generate_paper(
         "paper_id": paper_id,
         "title": title,
         "keywords": keywords,
-        "doc_titles": used_titles,
-        "doc_ids": [doc["doc_id"] for doc in used_docs],
-        "source_docs": used_docs,
-        "source_chunks": used_chunks,
+        "doc_titles": actual_titles,
+        "doc_ids": [doc["doc_id"] for doc in actual_docs],
+        "source_docs": actual_docs,
+        "source_chunks": actual_chunks,
         "difficulty": difficulty,
         "questions": questions,
         "created_at": int(time.time()),

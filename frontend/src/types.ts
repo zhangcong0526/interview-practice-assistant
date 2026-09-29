@@ -237,6 +237,8 @@ export interface ExpressionQuestion {
   role_name: string
   reference_answer: string
   keywords: string[]
+  standard_key_points?: string[]
+  reference_script?: string
 }
 
 export interface ExpressionMetrics {
@@ -269,6 +271,30 @@ export interface ExpressionCoach {
   example: string
   next_focus: string
   mindset_tip: string
+  coach_error?: string
+}
+
+export interface ExpressionPointReview {
+  hit_points: Array<{ point_id: string; text: string; evidence: string }>
+  missed_points: Array<{ point_id: string; text: string; evidence: string }>
+  hit_count: number
+  total_points: number
+  coverage_rate: number
+  error?: string
+}
+
+export interface ExpressionCoverage {
+  hit_count: number
+  total_points: number
+  coverage_rate: number
+}
+
+export interface ExpressionComparison {
+  previous_attempt_no: number
+  current_attempt_no: number
+  previous: ExpressionCoverage
+  current: ExpressionCoverage
+  still_missed: string[]
 }
 
 export interface ExpressionProgression {
@@ -288,6 +314,13 @@ export interface ExpressionSession {
   practice_mode: ExpressionPracticeMode
   question: string
   question_label: string
+  attempt_no?: number
+  previous_session_id?: string
+  practice_group_id?: string
+  standard_key_points?: string[]
+  reference_script?: string
+  point_review?: ExpressionPointReview
+  comparison?: ExpressionComparison | null
   transcript: string
   metrics: ExpressionMetrics
   progression: ExpressionProgression

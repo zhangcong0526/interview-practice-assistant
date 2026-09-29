@@ -33,6 +33,9 @@ async def analyze(req: ExpressionAnalyzeRequest):
             req.transcript,
             req.duration_sec,
             req.practice_mode,
+            req.standard_key_points,
+            req.reference_script,
+            req.previous_session_id,
         )
     except expression_service.ExpressionError as exc:
         raise HTTPException(422, str(exc))

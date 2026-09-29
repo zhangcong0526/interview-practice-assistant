@@ -595,6 +595,112 @@ EXPRESSION_SYSTEM = """你是一位面试表达教练，专门帮「脑子里有
   "mindset_tip": "一句临场心理建议"
 }"""
 
+SPEAKING_MATERIAL_SCHEMA = """{
+  "keywords": ["关键词1", "关键词2"],
+  "key_points": ["必须讲清的要点1", "必须讲清的要点2"],
+  "reference_script": "一段60到90秒可直接口述的参考话术"
+}"""
+
+SPEAKING_MATERIAL_SYSTEM = """你是一位面试表达训练的口播素材设计专家。
+
+你会收到一道面试题和它的题库参考答案。请生成一套用于表达训练的素材：口播关键词、标准要点、参考话术。
+
+严格要求：
+1. keywords 生成 5 到 8 个短提示词，帮助候选人在「关键词串联」模式里按参考答案顺序回忆表达。关键词必须来自题干或参考答案，禁止补充答案中没有的事实、工具、方法或结论。
+2. key_points 生成 3 到 5 条标准要点，每条用一句短话概括参考答案中必须讲清的内容；不要使用“先给结论”“举例说明”这类空泛框架词。
+3. reference_script 是 180 到 300 个汉字的可口述版本，按「结论 -> 关键原因/细节 -> 收束」组织，只能重组参考答案已有内容，禁止编造数据、技术细节或结论。
+4. reference_script 必须像真人说话，避免书面长句、Markdown、编号、括号补充和表情符号。
+5. 全部使用简体中文，保留必要英文术语，只输出 JSON。
+
+输出 JSON 结构：
+""" + SPEAKING_MATERIAL_SCHEMA
+
+
+def build_speaking_material_user(question: str, answer: str) -> str:
+    return "\n\n".join(
+        [
+            "【面试题】\n" + question.strip(),
+            "【参考答案】\n" + answer.strip(),
+            "请基于这道题的参考答案，生成关键词、标准要点和可口述参考话术。",
+        ]
+    )
+
+
+EXPRESSION_REVIEW_SCHEMA = """{
+  "point_review": {
+    "hit_points": [{"point_id": "P1", "evidence": "候选人提到了..."}],
+    "missed_points": [{"point_id": "P2", "evidence": "未说明..."}]
+  },
+  "coach": {
+    "summary": "一句话",
+    "strengths": ["具体肯定 1", "具体肯定 2"],
+    "fixes": ["可执行改进 1", "可执行改进 2"],
+    "example": "改写后的一句话示范",
+    "next_focus": "明天的一个练习重点",
+    "mindset_tip": "一句临场心理建议"
+  }
+}"""
+
+EXPRESSION_REVIEW_SYSTEM = """你是一位面试表达教练，正在做单题口述练习的结构化复盘。
+
+你会收到：训练档位、题目、标准要点、参考话术、候选人转写和本地表达指标。你的任务分为两层：
+1. point_review：判断候选人的回答是否语义命中每条标准要点。这是表达完整度检查，不是技术评分。允许换了说法、例子或语序；只要讲清核心含义就算命中。
+2. coach：只评价表达方式，不评价技术答案的对错，也不补充技术知识。照读档不考察记忆，关键词档重点看线索衔接，无提示档按真实面试状态判断。
+
+point_review 要求：
+- 只允许输出输入要点对应的 point_id，不能新增、合并或删除要点。
+- hit_points 和 missed_points 合起来必须恰好覆盖全部要点。
+- 每条 evidence 用不超过 30 字的短依据；命中时优先引用候选人原话中的关键词，未命中时说明缺了什么。
+- 不要为了鼓励而把模糊、跑题、只提到名词的要点判成命中。
+
+coach 要求：
+- summary 一句话；strengths 先给具体肯定；fixes 给 2 到 4 条立刻可执行的动作。
+- example 只能改写候选人原话中最别扭的一句，保留原意，不编造事实或数字。
+- next_focus 只给一个重点动作；mindset_tip 针对紧张和结果焦虑，每次换角度，不重复套话。
+- 全部使用简体中文，保留必要英文术语，只输出 JSON。
+
+输出 JSON 结构：
+""" + EXPRESSION_REVIEW_SCHEMA
+
+
+def build_expression_review_user(
+    role_name: str,
+    question: str,
+    transcript: str,
+    metrics: dict,
+    practice_mode: str,
+    points: list[dict],
+    reference_script: str,
+    previous_missed: list[str] | None = None,
+) -> str:
+    scores = metrics.get("scores") or {}
+    point_lines = [
+        f"{item.get('point_id')}: {item.get('text')}"
+        for item in points
+    ]
+    previous_lines = [
+        f"- {text}" for text in (previous_missed or [])
+    ]
+    parts = [
+        f"【训练档位】{practice_mode}",
+        f"【练习方向】{role_name}",
+        f"【题目】{question}",
+        "【标准要点】\n" + ("\n".join(point_lines) if point_lines else "（无标准要点）"),
+        "【参考话术】\n" + (reference_script.strip() or "（无参考话术）"),
+        (
+            "【客观指标】"
+            f"时长 {metrics.get('duration_sec')} 秒，语速 {metrics.get('rate_cpm')} 字/分钟，"
+            f"流畅 {scores.get('fluency')} / 结构 {scores.get('structure')} / 笃定 {scores.get('confidence')}；"
+            f"语气词 {metrics.get('filler_total')} 个、口头禅 {metrics.get('crutch_total')} 次、"
+            f"卡顿重复 {metrics.get('restart_count')} 处、结构信号词 {('、'.join(metrics.get('structure_markers') or [])) or '无'}"
+        ),
+        "【候选人的回答转写】\n" + transcript,
+    ]
+    if previous_lines:
+        parts.append("【上一轮遗漏的要点】\n" + "\n".join(previous_lines))
+    parts.append("请同时输出 point_review 和 coach。")
+    return "\n\n".join(parts)
+
 
 SPEAKING_KEYWORD_SCHEMA = """{
   "keywords": ["关键词1", "关键词2"]

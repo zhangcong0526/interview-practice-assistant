@@ -1,14 +1,17 @@
 import {
   AlertTriangle,
   BookOpen,
+  CheckCircle2,
   EyeOff,
   Flame,
   ListChecks,
   Loader2,
   Mic,
+  Redo2,
   RefreshCw,
   Square,
   TrendingUp,
+  XCircle,
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
@@ -55,6 +58,111 @@ function formatClock(seconds: number): string {
   return `${String(minutes).padStart(2, '0')}:${String(rest).padStart(2, '0')}`
 }
 
+function ExpressionPointReviewCard({
+  pointReview,
+  onRetry,
+}: {
+  pointReview?: ExpressionSession['point_review']
+  onRetry: () => void
+}) {
+  if (!pointReview || pointReview.total_points === 0) return null
+
+  return (
+    <div className="mt-4 rounded-lg border border-zinc-200 bg-white p-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h3 className="text-sm font-semibold text-zinc-900">要点命中</h3>
+          <p className="mt-1 text-xs leading-5 text-zinc-500">
+            命中 {pointReview.hit_count}/{pointReview.total_points} · 覆盖率 {pointReview.coverage_rate}%
+          </p>
+        </div>
+        {pointReview.missed_points.length > 0 && (
+          <button
+            type="button"
+            className="secondary-btn px-3 py-1.5 text-xs"
+            onClick={onRetry}
+          >
+            <Redo2 className="size-3.5" aria-hidden="true" />
+            针对遗漏再说一遍
+          </button>
+        )}
+      </div>
+      <div className="mt-2 h-2 overflow-hidden rounded-lg bg-zinc-100">
+        <div
+          className={`h-full rounded-lg ${
+            pointReview.coverage_rate >= 80
+              ? 'bg-emerald-600'
+              : pointReview.coverage_rate >= 50
+                ? 'bg-amber-500'
+                : 'bg-red-500'
+          }`}
+          style={{ width: `${pointReview.coverage_rate}%` }}
+        />
+      </div>
+
+      <div className="mt-3 grid gap-3 md:grid-cols-2">
+        <div className="space-y-2">
+          {pointReview.hit_points.map((item) => (
+            <div key={item.point_id} className="rounded-lg border border-emerald-200 bg-emerald-50 p-2.5">
+              <div className="flex items-start gap-2">
+                <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-emerald-600" aria-hidden="true" />
+                <div>
+                  <p className="text-sm leading-6 text-emerald-950">{item.text}</p>
+                  <p className="mt-0.5 text-xs leading-5 text-emerald-700">{item.evidence}</p>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="space-y-2">
+          {pointReview.missed_points.map((item) => (
+            <div key={item.point_id} className="rounded-lg border border-red-200 bg-red-50 p-2.5">
+              <div className="flex items-start gap-2">
+                <XCircle className="mt-0.5 size-4 shrink-0 text-red-500" aria-hidden="true" />
+                <div>
+                  <p className="text-sm leading-6 text-red-950">{item.text}</p>
+                  <p className="mt-0.5 text-xs leading-5 text-red-700">{item.evidence}</p>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {pointReview.error && (
+        <p className="mt-3 flex items-start gap-2 text-xs leading-5 text-amber-700">
+          <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+          {pointReview.error}
+        </p>
+      )}
+    </div>
+  )
+}
+
+function ExpressionComparisonCard({ comparison }: { comparison?: ExpressionSession['comparison'] }) {
+  if (!comparison) return null
+
+  return (
+    <div className="mt-3 rounded-lg border border-sky-200 bg-sky-50 p-3">
+      <p className="text-sm font-medium text-sky-950">第 {comparison.previous_attempt_no} 次 vs 第 {comparison.current_attempt_no} 次</p>
+      <div className="mt-2 flex items-center gap-2 text-sm text-sky-900">
+        <span className="rounded bg-white px-2 py-1">
+          上一次 {comparison.previous.coverage_rate}%
+        </span>
+        <span aria-hidden="true">→</span>
+        <span className="rounded bg-sky-100 px-2 py-1 font-medium">
+          本次 {comparison.current.coverage_rate}%
+        </span>
+      </div>
+      {comparison.still_missed.length > 0 && (
+        <p className="mt-2 text-xs leading-5 text-sky-800">
+          仍需补讲：{comparison.still_missed.join('；')}
+        </p>
+      )}
+    </div>
+  )
+}
+
 export function ExpressionDrill() {
   const [roles, setRoles] = useState<InterviewRoleOption[]>([])
   const [roleKey, setRoleKey] = useState(
@@ -68,6 +176,8 @@ export function ExpressionDrill() {
   const [transcript, setTranscript] = useState('')
   const [elapsed, setElapsed] = useState(0)
   const [session, setSession] = useState<ExpressionSession | null>(null)
+  const [previousSessionId, setPreviousSessionId] = useState('')
+  const [retryMissedPoints, setRetryMissedPoints] = useState<string[]>([])
   const [progress, setProgress] = useState<ExpressionProgress | null>(null)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
@@ -78,6 +188,7 @@ export function ExpressionDrill() {
   const chunksRef = useRef<Blob[]>([])
   const shouldTranscribeRef = useRef(false)
   const answerRoundRef = useRef(0)
+  const isRetrying = previousSessionId !== ''
   const [mediaSupported] = useState(
     () =>
       typeof navigator !== 'undefined' &&
@@ -122,6 +233,8 @@ export function ExpressionDrill() {
       setError('')
       setSession(null)
       setTranscript('')
+      setPreviousSessionId('')
+      setRetryMissedPoints([])
       try {
         setQuestion(await getExpressionQuestion(key))
       } catch (loadError) {
@@ -167,6 +280,8 @@ export function ExpressionDrill() {
     setError('')
     setTranscript('')
     setElapsed(0)
+    setPreviousSessionId('')
+    setRetryMissedPoints([])
   }
 
   const resetAttempt = () => {
@@ -192,6 +307,21 @@ export function ExpressionDrill() {
       return
     }
     chooseHintMode(next)
+  }
+
+  const retryMissedPointsAgain = () => {
+    const missed = session?.point_review?.missed_points ?? []
+    if (!session || missed.length === 0) return
+    answerRoundRef.current += 1
+    cancelActiveRecording()
+    setHintMode('blind')
+    window.localStorage.setItem('opc-expression-hint-mode', 'blind')
+    setPreviousSessionId(session.session_id)
+    setRetryMissedPoints(missed.map((item) => item.text))
+    setSession(null)
+    setError('')
+    setTranscript('')
+    setElapsed(0)
   }
 
   const handleProgressionClick = () => {
@@ -312,10 +442,16 @@ export function ExpressionDrill() {
         question: question.question,
         question_label: question.label,
         practice_mode: hintMode,
+        standard_key_points: question.standard_key_points ?? [],
+        reference_script: question.reference_script ?? '',
+        previous_session_id: previousSessionId,
         transcript: content,
         duration_sec: elapsed || Math.max(1, Math.round(content.length / 3.2)),
       })
       setSession(result)
+      setRetryMissedPoints(
+        (result.point_review?.missed_points ?? []).map((item) => item.text),
+      )
       await refreshProgress()
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : '分析失败。')
@@ -338,6 +474,23 @@ export function ExpressionDrill() {
             一次一题，只练怎么说，不考知识点。每天 {progress?.daily_goal ?? 3} 题，紧张和口头禅会随趋势一起改善。
           </p>
         </div>
+
+        {isRetrying && retryMissedPoints.length > 0 && (
+          <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3">
+            <div className="flex items-center gap-2">
+              <Redo2 className="size-4 text-red-600" aria-hidden="true" />
+              <p className="text-sm font-medium text-red-800">遗漏重述训练</p>
+            </div>
+            <p className="mt-1.5 text-xs leading-5 text-red-700">
+              本轮只针对上一次没讲清的要点，强制使用无提示模式。把它们自然地补进回答里。
+            </p>
+            <ul className="mt-2 space-y-1 text-sm leading-6 text-red-900">
+              {retryMissedPoints.map((point, index) => (
+                <li key={`${point}-${index}`}>· {point}</li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         {progress && progress.total_sessions > 0 && (
           <dl className="mt-4 grid grid-cols-3 gap-2 text-center">
@@ -434,16 +587,19 @@ export function ExpressionDrill() {
           {HINT_MODES.map((mode) => {
             const HintIcon = mode.icon
             const active = hintMode === mode.key
+            const lockedByRetry = isRetrying && mode.key !== 'blind'
             return (
               <button
                 key={mode.key}
                 type="button"
                 onClick={() => chooseHintMode(mode.key)}
-                disabled={busy === 'record' || busy === 'transcribing' || busy === 'analyze'}
+                disabled={lockedByRetry || busy === 'record' || busy === 'transcribing' || busy === 'analyze'}
                 className={`flex items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-xs font-medium transition ${
                   active
                     ? 'border-emerald-500 bg-emerald-50 text-emerald-800'
-                    : 'border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300'
+                    : lockedByRetry
+                      ? 'border-zinc-100 bg-zinc-50 text-zinc-300'
+                      : 'border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300'
                 }`}
               >
                 <HintIcon className="size-3.5" aria-hidden="true" />
@@ -589,12 +745,39 @@ export function ExpressionDrill() {
               <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-600">
                 {MODE_LABEL[session.practice_mode]}
               </span>
+              {session.attempt_no && session.attempt_no > 1 && (
+                <span className="rounded-full bg-sky-50 px-2 py-0.5 text-xs text-sky-700">
+                  第 {session.attempt_no} 次尝试
+                </span>
+              )}
             </div>
             <button type="button" className="secondary-btn" onClick={() => void loadQuestion(roleKey)}>
               <RefreshCw className="size-4" aria-hidden="true" />
               练下一题
             </button>
           </div>
+
+          <ExpressionPointReviewCard
+            pointReview={session.point_review}
+            onRetry={retryMissedPointsAgain}
+          />
+
+          {session.practice_mode === 'blind' && session.reference_script && (
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+                <p className="text-xs font-semibold text-zinc-700">你的转写</p>
+                <p className="mt-2 max-h-60 overflow-y-auto whitespace-pre-line pr-1 text-sm leading-6 text-zinc-800">
+                  {session.transcript}
+                </p>
+              </div>
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+                <p className="text-xs font-semibold text-emerald-900">参考话术（提交后展示）</p>
+                <p className="mt-2 max-h-60 overflow-y-auto whitespace-pre-line pr-1 text-sm leading-6 text-emerald-950">
+                  {session.reference_script}
+                </p>
+              </div>
+            </div>
+          )}
 
           <div
             className={`mt-3 rounded-lg border px-3 py-2.5 ${
@@ -631,6 +814,8 @@ export function ExpressionDrill() {
               {session.progression.message}
             </p>
           </div>
+
+          <ExpressionComparisonCard comparison={session.comparison} />
 
           <div className="mt-4 grid grid-cols-3 gap-3">
             {(['fluency', 'structure', 'confidence'] as const).map((key) => (

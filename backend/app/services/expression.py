@@ -32,6 +32,8 @@ class ExpressionError(RuntimeError):
 SESSION_DIR = settings.data_dir / "expression" / "sessions"
 KEYWORD_CACHE_DIR = settings.data_dir / "expression" / "keyword_cache"
 KEYWORD_CACHE_VERSION = "speaking-keywords-v2"
+SPEAKING_MATERIAL_CACHE_DIR = settings.data_dir / "expression" / "speaking_material_cache"
+SPEAKING_MATERIAL_CACHE_VERSION = "speaking-materials-v1"
 
 # 纯粹的语气词，出现即扣分。
 FILLER_WORDS = ("嗯", "呃", "唉", "哦", "啊", "额")
@@ -61,6 +63,7 @@ RESTART_RE = re.compile(r"([\u4e00-\u9fff]{1,3})\1+")
 def ensure_dirs() -> None:
     SESSION_DIR.mkdir(parents=True, exist_ok=True)
     KEYWORD_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    SPEAKING_MATERIAL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _write_json(path: Path, data: dict) -> None:
@@ -169,6 +172,131 @@ def _speaking_keywords(question: str, answer: str, fallback: list[str]) -> list[
     return fallback
 
 
+def _clean_speaking_point(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    point = re.sub(r"^(?:[-*•·]|\d+[.、)])\s*", "", value.strip())
+    point = re.sub(r"\s+", " ", point).strip("：:；;，,。.!！?？")
+    return point
+
+
+def _fallback_key_points(answer: str) -> list[str]:
+    """LLM 不可用时，从题库答案本身抽短句兜底，不额外发明内容。"""
+    normalized = re.sub(r"^#{1,6}\s*", "", answer.strip(), flags=re.MULTILINE)
+    candidates = re.split(r"[。；;！!？?\n]+", normalized)
+    result: list[str] = []
+    seen: set[str] = set()
+    for raw in candidates:
+        point = _clean_speaking_point(raw)
+        normalized_point = _keyword_norm(point)
+        if not point or len(point) > 48 or normalized_point in seen:
+            continue
+        # 太短的主谓短语会让“标准要点”变成关键词，降低复盘意义。
+        if len(point) < 8 and not re.search(r"[A-Za-z]", point):
+            continue
+        seen.add(normalized_point)
+        result.append(point)
+        if len(result) >= 5:
+            break
+    return result
+
+
+def _fallback_reference_script(answer: str) -> str:
+    """只截断和轻量清理题库答案，不凭空补写口播话术。"""
+    text = re.sub(r"^(?:[-*•·]|\d+[.、)])\s*", "", answer.strip(), flags=re.MULTILINE)
+    text = re.sub(r"\n{2,}", "\n", text)
+    if len(text) <= 320:
+        return text
+    cut = text[:320]
+    last_break = max(cut.rfind("。"), cut.rfind("；"), cut.rfind("；"), cut.rfind("\n"))
+    return cut[:last_break + 1].strip() if last_break >= 80 else cut.strip()
+
+
+def _valid_speaking_material(
+    raw: object,
+    question: str,
+    answer: str,
+) -> tuple[list[str], list[str], str] | None:
+    if not isinstance(raw, dict):
+        return None
+
+    keywords = _valid_speaking_keywords(raw.get("keywords"), question, answer)
+    points: list[str] = []
+    point_seen: set[str] = set()
+    for value in raw.get("key_points") or []:
+        point = _clean_speaking_point(value)
+        normalized = _keyword_norm(point)
+        if not point or len(point) > 60 or normalized in point_seen:
+            continue
+        point_seen.add(normalized)
+        points.append(point)
+
+    script = str(raw.get("reference_script") or "").strip()
+    script_chars = len(re.sub(r"\s+", "", script))
+    if len(keywords) < 5 or not (3 <= len(points) <= 5) or not (140 <= script_chars <= 400):
+        return None
+    return keywords[:8], points[:5], script
+
+
+def _speaking_materials(
+    question: str,
+    answer: str,
+    fallback_keywords: list[str],
+) -> tuple[list[str], list[str], str]:
+    """一次生成并缓存表达素材，避免同一题反复调用 LLM。"""
+    if not answer.strip():
+        return fallback_keywords, [], ""
+
+    digest = hashlib.sha1(f"material:{question}\n{answer}".encode("utf-8")).hexdigest()
+    cache_path = SPEAKING_MATERIAL_CACHE_DIR / f"{digest}.json"
+    cached = _read_json(cache_path)
+    if cached and cached.get("version") == SPEAKING_MATERIAL_CACHE_VERSION and cached.get("hash") == digest:
+        keywords = _valid_speaking_keywords(cached.get("keywords"), question, answer)
+        cached_points = [
+            point
+            for point in (
+                _clean_speaking_point(value)
+                for value in (cached.get("key_points") if isinstance(cached.get("key_points"), list) else [])
+            )
+            if point
+        ]
+        script = str(cached.get("reference_script") or "").strip()
+        if keywords and cached_points and script:
+            return keywords, cached_points, script
+
+    try:
+        raw = llm_service.chat_json(
+            prompts.SPEAKING_MATERIAL_SYSTEM,
+            prompts.build_speaking_material_user(question, answer),
+            max_tokens=1400,
+        )
+        material = _valid_speaking_material(raw, question, answer)
+        if material:
+            keywords, points, script = material
+            ensure_dirs()
+            payload = {
+                "version": SPEAKING_MATERIAL_CACHE_VERSION,
+                "hash": digest,
+                "keywords": keywords,
+                "key_points": points,
+                "reference_script": script,
+                "created_at": int(time.time()),
+            }
+            tmp_path = cache_path.with_name(cache_path.name + ".tmp")
+            _write_json(tmp_path, payload)
+            os.replace(tmp_path, cache_path)
+            return keywords, points, script
+    except Exception:
+        # 表达素材可以降级；提交后的客观指标不依赖它。
+        pass
+
+    return (
+        _valid_speaking_keywords(fallback_keywords, question, answer) or fallback_keywords,
+        _fallback_key_points(answer),
+        _fallback_reference_script(answer),
+    )
+
+
 def _drill_display_question(item: dict) -> str:
     """练习题面和关键词缓存共用同一份清洗结果，避免批注导致缓存键不一致。"""
     question = re.sub(
@@ -203,7 +331,7 @@ def drill_question(role_key: str) -> dict:
     # 真题库原文里偶尔夹着文档批注，如「（answers.md第46题已有）」，练习题面要干净。
     question = _drill_display_question(item)
     display_question = question or item["question"]
-    keywords = _speaking_keywords(
+    keywords, standard_key_points, reference_script = _speaking_materials(
         display_question,
         item.get("reference_answer", ""),
         item.get("keywords", []),
@@ -215,6 +343,8 @@ def drill_question(role_key: str) -> dict:
         "section": item.get("section", ""),
         "reference_answer": item.get("reference_answer", ""),
         "keywords": keywords,
+        "standard_key_points": standard_key_points,
+        "reference_script": reference_script,
         "role_key": role.key,
         "role_name": role.name,
     }
@@ -364,6 +494,200 @@ def compute_metrics(transcript: str, duration_sec: float) -> dict:
     }
 
 
+def _local_point_review(points: list[dict], transcript: str) -> dict:
+    """LLM 失败时用确定性命中兜底：不做语义判断，只识别明显原文命中。"""
+    normalized_transcript = _keyword_norm(transcript)
+    hit_points: list[dict] = []
+    missed_points: list[dict] = []
+    for point in points:
+        point_id = str(point.get("point_id") or "")
+        text = str(point.get("text") or "")
+        if _keyword_norm(text) in normalized_transcript:
+            hit_points.append({
+                "point_id": point_id,
+                "text": text,
+                "evidence": "回答中明确提到了该要点。",
+            })
+        else:
+            missed_points.append({
+                "point_id": point_id,
+                "text": text,
+                "evidence": "未在回答中识别到该要点。",
+            })
+    return _build_point_review(hit_points, missed_points, points, "")
+
+
+def _build_point_review(
+    hit_points: list[dict],
+    missed_points: list[dict],
+    points: list[dict],
+    error: str = "",
+) -> dict:
+    by_id = {str(item.get("point_id")): str(item.get("text") or "") for item in points}
+    allowed_ids = set(by_id)
+    seen: set[str] = set()
+
+    def normalize(items: object, is_hit: bool) -> list[dict]:
+        result: list[dict] = []
+        if not isinstance(items, list):
+            return result
+        for raw in items:
+            if not isinstance(raw, dict):
+                continue
+            point_id = str(raw.get("point_id") or "").strip().upper()
+            if point_id not in allowed_ids or point_id in seen:
+                continue
+            evidence = re.sub(r"\s+", " ", str(raw.get("evidence") or "")).strip()
+            if len(evidence) > 60:
+                evidence = evidence[:57].rstrip() + "..."
+            seen.add(point_id)
+            result.append({
+                "point_id": point_id,
+                "text": by_id[point_id],
+                "evidence": evidence or ("命中该要点。" if is_hit else "未讲清该要点。"),
+            })
+        return result
+
+    normalized_hits = normalize(hit_points, True)
+    normalized_missed = normalize(missed_points, False)
+    for point in points:
+        point_id = str(point.get("point_id"))
+        if point_id in seen:
+            continue
+        normalized_missed.append({
+            "point_id": point_id,
+            "text": by_id[point_id],
+            "evidence": "模型未给出有效判定，按未命中处理。",
+        })
+
+    total = len(points)
+    hit_count = len(normalized_hits)
+    return {
+        "hit_points": normalized_hits,
+        "missed_points": normalized_missed,
+        "hit_count": hit_count,
+        "total_points": total,
+        "coverage_rate": round(hit_count * 100 / total) if total else 0,
+        "error": error,
+    }
+
+
+def _parse_point_review(raw: object, points: list[dict]) -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    review = raw.get("point_review")
+    if not isinstance(review, dict):
+        return None
+    normalized = _build_point_review(
+        review.get("hit_points"),
+        review.get("missed_points"),
+        points,
+    )
+    # 有些模型会漏填 missed_points；这里补齐剩余要点，避免前端覆盖率虚高。
+    if len(normalized.get("hit_points", [])) + len(normalized.get("missed_points", [])) != len(points):
+        return None
+    return normalized
+
+
+def _coverage_summary(review: dict | None) -> dict:
+    if not review or not review.get("total_points"):
+        return {"hit_count": 0, "total_points": 0, "coverage_rate": 0}
+    return {
+        "hit_count": int(review.get("hit_count") or 0),
+        "total_points": int(review.get("total_points") or 0),
+        "coverage_rate": float(review.get("coverage_rate") or 0),
+    }
+
+
+def _load_prior_session(session_id: str, role_key: str, question: str, question_label: str) -> dict | None:
+    if not re.fullmatch(r"[a-f0-9]{32}", session_id or ""):
+        return None
+    prior = _read_json(SESSION_DIR / f"{session_id}.json")
+    if not prior:
+        return None
+    same_role = prior.get("role_key") == role_key
+    same_question = (
+        prior.get("question") == question
+        and (prior.get("question_label") or "") == question_label
+    )
+    return prior if same_role and same_question else None
+
+
+def _initial_session_for(prior: dict) -> dict:
+    seen = {prior.get("session_id")}
+    current = prior
+    while True:
+        previous_id = str(current.get("previous_session_id") or "")
+        if not re.fullmatch(r"[a-f0-9]{32}", previous_id) or previous_id in seen:
+            return current
+        previous = _read_json(SESSION_DIR / f"{previous_id}.json")
+        if not previous or previous.get("role_key") != current.get("role_key"):
+            return current
+        seen.add(previous_id)
+        current = previous
+
+
+def _review_and_coach(
+    role_name: str,
+    question: str,
+    transcript: str,
+    metrics: dict,
+    practice_mode: str = "blind",
+    points: list[dict] | None = None,
+    reference_script: str = "",
+    previous_missed: list[str] | None = None,
+) -> dict:
+    points = points or []
+    fallback_review = _local_point_review(points, transcript)
+    fallback_coach = {
+        "summary": "本次教练建议生成失败，但客观指标已记录，可以先按指标自查。",
+        "strengths": [],
+        "fixes": [],
+        "example": "",
+        "next_focus": "下一轮先刻意降低语气词，开口前停半秒。",
+        "mindset_tip": "",
+    }
+    try:
+        raw = llm_service.chat_json(
+            prompts.EXPRESSION_REVIEW_SYSTEM,
+            prompts.build_expression_review_user(
+                role_name,
+                question,
+                transcript,
+                metrics,
+                MODE_LABELS.get(practice_mode, "无提示实战"),
+                points,
+                reference_script,
+                previous_missed,
+            ),
+            max_tokens=1800,
+        )
+    except llm_service.LlmError as exc:
+        fallback_coach["coach_error"] = str(exc)
+        fallback_review = _local_point_review(points, transcript)
+        fallback_review["error"] = "要点复核暂时失败，已用本地命中检查。"
+        return {"point_review": fallback_review, "coach": fallback_coach}
+
+    point_review = _parse_point_review(raw.get("point_review"), points)
+    coach_raw = raw.get("coach") if isinstance(raw.get("coach"), dict) else {}
+
+    def items(key: str) -> list[str]:
+        return [str(value).strip() for value in (coach_raw.get(key) or []) if str(value).strip()]
+
+    coach = {
+        "summary": str(coach_raw.get("summary") or "").strip() or fallback_coach["summary"],
+        "strengths": items("strengths")[:3],
+        "fixes": items("fixes")[:4],
+        "example": str(coach_raw.get("example") or "").strip(),
+        "next_focus": str(coach_raw.get("next_focus") or "").strip() or fallback_coach["next_focus"],
+        "mindset_tip": str(coach_raw.get("mindset_tip") or "").strip(),
+    }
+    if point_review is None:
+        point_review = fallback_review
+        point_review["error"] = "模型要点判定不完整，已用本地命中检查。"
+    return {"point_review": point_review, "coach": coach}
+
+
 def _coach(
     role_name: str,
     question: str,
@@ -413,15 +737,80 @@ def analyze(
     transcript: str,
     duration_sec: float,
     practice_mode: str = "blind",
+    standard_key_points: list[str] | None = None,
+    reference_script: str = "",
+    previous_session_id: str = "",
 ) -> dict:
     role = roles_service.get_role(role_key)
     if not role:
         raise ExpressionError("未知岗位。")
     if practice_mode not in MODE_LABELS:
         raise ExpressionError("未知训练模式。")
+    prior = _load_prior_session(previous_session_id, role.key, question, question_label)
+    # 重述遗漏要点属于刻意训练，后端也强制 blind，防止前端状态被绕过。
+    if prior:
+        practice_mode = "blind"
     metrics = compute_metrics(transcript, duration_sec)
     step = progression(metrics, practice_mode)
-    coach = _coach(role.name, question, transcript, metrics, practice_mode)
+
+    valid_points: list[str] = []
+    seen_points: set[str] = set()
+    for value in standard_key_points or []:
+        text = str(value).strip()
+        normalized = _keyword_norm(text)
+        if text and normalized not in seen_points:
+            valid_points.append(text)
+            seen_points.add(normalized)
+    if prior and not valid_points:
+        valid_points = [str(item) for item in (prior.get("standard_key_points") or []) if str(item).strip()]
+    if not reference_script and prior:
+        reference_script = str(prior.get("reference_script") or "")
+
+    point_payload = [
+        {"point_id": f"P{index}", "text": text}
+        for index, text in enumerate(valid_points[:5], start=1)
+    ]
+    previous_review = prior.get("point_review") if prior else None
+    previous_missed = [
+        str(item.get("text") or "").strip()
+        for item in ((previous_review or {}).get("missed_points") or [])
+        if str(item.get("text") or "").strip()
+    ] if prior else []
+    review = _review_and_coach(
+        role.name,
+        question,
+        transcript,
+        metrics,
+        practice_mode,
+        point_payload,
+        reference_script,
+        previous_missed,
+    )
+    coach = review["coach"]
+
+    attempt_no = 1
+    practice_group_id = ""
+    if prior:
+        attempt_no = int(prior.get("attempt_no") or 1) + 1
+        practice_group_id = str(prior.get("practice_group_id") or prior.get("session_id") or "")
+
+    point_review = review["point_review"]
+    comparison = None
+    initial = _initial_session_for(prior) if prior else None
+    if initial and initial.get("point_review") and point_payload:
+        previous_summary = _coverage_summary(initial.get("point_review"))
+        current_summary = _coverage_summary(point_review)
+        comparison = {
+            "previous_attempt_no": int(initial.get("attempt_no") or 1),
+            "current_attempt_no": attempt_no,
+            "previous": previous_summary,
+            "current": current_summary,
+            "still_missed": [
+                str(item.get("text") or "")
+                for item in point_review.get("missed_points", [])
+                if str(item.get("text") or "")
+            ],
+        }
 
     session = {
         "session_id": uuid.uuid4().hex,
@@ -432,6 +821,13 @@ def analyze(
         "practice_mode": practice_mode,
         "question": question,
         "question_label": question_label,
+        "attempt_no": attempt_no,
+        "previous_session_id": prior.get("session_id", "") if prior else "",
+        "practice_group_id": practice_group_id or "",
+        "standard_key_points": [item["text"] for item in point_payload],
+        "reference_script": reference_script,
+        "point_review": point_review,
+        "comparison": comparison,
         "transcript": transcript.strip()[:6000],
         "metrics": metrics,
         "progression": step,

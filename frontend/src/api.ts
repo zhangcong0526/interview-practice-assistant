@@ -514,6 +514,9 @@ export async function analyzeExpression(payload: {
   question: string
   question_label: string
   practice_mode: 'read' | 'keywords' | 'blind'
+  standard_key_points?: string[]
+  reference_script?: string
+  previous_session_id?: string
   transcript: string
   duration_sec: number
 }): Promise<ExpressionSession> {

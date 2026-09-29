@@ -121,6 +121,9 @@ class ExpressionAnalyzeRequest(BaseModel):
     question: str = Field(min_length=1, max_length=500)
     question_label: str = ""
     practice_mode: str = Field(default="blind", pattern="^(read|keywords|blind)$")
+    standard_key_points: list[str] = Field(default_factory=list)
+    reference_script: str = Field(default="", max_length=3000)
+    previous_session_id: str = ""
     transcript: str = Field(min_length=1, max_length=20000)
     duration_sec: float = Field(default=0, ge=0, le=1800)
 

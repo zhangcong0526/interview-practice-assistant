@@ -145,6 +145,7 @@ export default function App() {
     setPaper(next)
     setAttempt(null)
     setQuizPhase('running')
+    setView('quiz')
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }, [])
 

@@ -35,6 +35,7 @@ TOPICS_FILE = QUIZ_DIR / "topics.json"
 VALID_TYPES = ("single", "multiple", "judge")
 TYPE_LABELS = {"single": "单选题", "multiple": "多选题", "judge": "判断题"}
 MAX_MATERIAL_CHARS = 24_000
+MAX_KEYWORD_MATERIAL_CHARS = 12_000
 MAX_REVIEW_SOURCE_CHARS = 2_400
 MAX_REVIEW_REFS_PER_TOPIC = 1
 MAX_REVIEW_REF_CHARS = 400
@@ -735,15 +736,20 @@ def extract_topics(doc_ids: list[str] | None = None, refresh: bool = False) -> l
     if cached and cached.get("signature") == signature and not refresh:
         return cached.get("topics") or []
 
+    # 全库标引不需要读完整正文。均摊预算能避免第一份长文档占满输入，
+    # 同时把所有文档的标题和开头片段都交给模型，关键词覆盖更均衡。
     material_parts: list[str] = []
-    budget = MAX_MATERIAL_CHARS
+    keyword_budget = MAX_KEYWORD_MATERIAL_CHARS
+    per_doc_budget = max(400, keyword_budget // max(1, len(documents)))
+    keyword_started_at = time.perf_counter()
     for doc in documents:
-        if budget <= 0:
+        if keyword_budget <= 0:
             break
-        text = _load_document_text(doc["doc_id"])[:budget]
+        text = _load_document_text(doc["doc_id"])[:per_doc_budget]
         if text:
+            text = text[:keyword_budget]
             material_parts.append(f"[资料来源：{doc['title']}]\n{text}")
-            budget -= len(text)
+            keyword_budget -= len(text)
     material = "\n\n".join(material_parts)
     if not material.strip():
         raise QuizError("选中的文档没有可用正文。")
@@ -779,6 +785,13 @@ def extract_topics(doc_ids: list[str] | None = None, refresh: bool = False) -> l
             }
         )
     topics.sort(key=lambda item: item["weight"], reverse=True)
+
+    quiz_logger.info(
+        "topics extracted docs=%d material_chars=%d elapsed=%.2fs",
+        len(documents),
+        MAX_KEYWORD_MATERIAL_CHARS - keyword_budget,
+        time.perf_counter() - keyword_started_at,
+    )
 
     cache[cache_key] = {"signature": signature, "topics": topics}
     _write_json(TOPICS_FILE, cache)

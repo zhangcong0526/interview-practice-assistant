@@ -370,7 +370,11 @@ export function QuizSetup({
               className="secondary-btn px-3 py-2 text-xs"
               onClick={() => void loadTopics(true)}
               disabled={loadingTopics || Boolean(busy)}
-              title="重新从知识库提炼关键词"
+              title={
+                docIds.length
+                  ? '重新从所选资料提炼关键词'
+                  : '重新从全部资料提炼关键词，耗时较长'
+              }
             >
               {loadingTopics ? (
                 <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
@@ -530,7 +534,9 @@ export function QuizSetup({
             })}
           </ul>
           <p className="mt-1.5 text-xs text-zinc-500">
-            不选则遍历全部文档。
+            {docIds.length
+              ? '只从已勾选资料提炼关键词。'
+              : '未勾选资料时，会提炼全部知识库资料；全库耗时较长。'}
           </p>
         </div>
       )}

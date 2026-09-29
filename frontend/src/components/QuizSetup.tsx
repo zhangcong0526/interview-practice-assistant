@@ -63,7 +63,7 @@ export function QuizSetup({
   const [single, setSingle] = useState(10)
   const [multiple, setMultiple] = useState(6)
   const [judge, setJudge] = useState(4)
-  const [difficulty, setDifficulty] = useState('mixed')
+  const [difficulty, setDifficulty] = useState('easy')
   const [loadingTopics, setLoadingTopics] = useState(false)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')

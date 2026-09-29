@@ -1,4 +1,5 @@
 import {
+  ArrowLeft,
   AlertTriangle,
   Check,
   FilePlus2,
@@ -328,7 +329,7 @@ export function QuizSetup({
               type="button"
               className="secondary-btn px-3 py-2 text-xs"
               onClick={() => handleMistakeQuiz('current')}
-              disabled={Boolean(busy)}
+              disabled={Boolean(busy) || mistakePanelOpen}
               title="按本卷错题知识点生成变形题"
             >
               {busy === 'mistake-current' ? (
@@ -344,10 +345,15 @@ export function QuizSetup({
           {mistakeCount > 0 && (
             <button
               type="button"
-              className="secondary-btn px-3 py-2 text-xs"
+              className={`secondary-btn px-3 py-2 text-xs ${
+                mistakePanelOpen
+                  ? 'border-emerald-500 bg-emerald-600 text-white hover:bg-emerald-700'
+                  : ''
+              }`}
               onClick={() => setMistakePanelOpen((current) => !current)}
               disabled={Boolean(busy)}
               aria-expanded={mistakePanelOpen}
+              aria-pressed={mistakePanelOpen}
               title="选择时间范围、知识点和题量后重练错题"
             >
               {busy === 'mistake-all' ? (
@@ -379,7 +385,23 @@ export function QuizSetup({
 
       {mistakePanelOpen && (
         <div className="mt-4 rounded-lg border border-zinc-200 bg-zinc-50 p-3.5">
-          <div>
+          <div className="relative flex min-h-8 items-center justify-center">
+            <button
+              type="button"
+              className="secondary-btn absolute left-0 top-1/2 -translate-y-1/2 px-3 py-1.5 text-xs"
+              onClick={() => setMistakePanelOpen(false)}
+              disabled={Boolean(busy)}
+              title="返回知识点组卷"
+            >
+              <ArrowLeft className="size-3.5" aria-hidden="true" />
+              返回上级
+            </button>
+            <span className="text-sm font-semibold text-zinc-900">
+              自定义错题重练
+            </span>
+          </div>
+
+          <div className="mt-3">
             <span className="field-label">时间范围</span>
             <div className="flex flex-wrap gap-1.5">
               {MISTAKE_TIME_RANGES.map((item) => (

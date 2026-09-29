@@ -12,6 +12,7 @@ import {
   Play,
   RotateCcw,
   Settings,
+  BookOpenCheck,
 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import {
@@ -23,6 +24,7 @@ import {
   listKnowledgeDocuments,
   listMistakes,
   pollJob,
+  getReviewDashboard,
   searchKnowledge,
 } from './api'
 import { ChunkedUploader } from './components/ChunkedUploader'
@@ -37,6 +39,7 @@ import { QuizSetup } from './components/QuizSetup'
 import { ReportView } from './components/ReportView'
 import { ResumeManager } from './components/ResumeManager'
 import { ResumeAdvisor } from './components/ResumeAdvisor'
+import { WrongReviewPage } from './components/WrongReviewPage'
 import { Stepper } from './components/Stepper'
 import type {
   AnalysisReport,
@@ -48,11 +51,12 @@ import type {
   QuizProgress,
   ResumeRecord,
   LlmConfig,
+  ReviewDashboard,
 } from './types'
 
 type Phase = 'input' | 'analyzing' | 'report'
 type InputMode = 'upload' | 'paste' | 'live'
-type WorkspaceView = 'practice' | 'quiz' | 'expression'
+type WorkspaceView = 'practice' | 'quiz' | 'review' | 'expression'
 type QuizPhase = 'setup' | 'running' | 'result'
 
 interface UploadedFile {
@@ -93,6 +97,7 @@ export default function App() {
   const [mistakes, setMistakes] = useState<MistakeItem[]>([])
   const [progress, setProgress] = useState<QuizProgress | null>(null)
   const [llmConfig, setLlmConfig] = useState<LlmConfig | null>(null)
+  const [reviewDashboard, setReviewDashboard] = useState<ReviewDashboard | null>(null)
   const [modelSettingsOpen, setModelSettingsOpen] = useState(false)
 
   useEffect(() => {
@@ -122,12 +127,14 @@ export default function App() {
   }, [])
 
   const refreshQuizState = useCallback(async () => {
-    const [nextMistakes, nextProgress] = await Promise.all([
+    const [nextMistakes, nextProgress, nextReview] = await Promise.all([
       listMistakes().catch(() => [] as MistakeItem[]),
       getQuizProgress().catch(() => null),
+      getReviewDashboard().catch(() => null),
     ])
     setMistakes(nextMistakes)
     setProgress(nextProgress)
+    setReviewDashboard(nextReview)
   }, [])
 
   useEffect(() => {
@@ -289,6 +296,18 @@ export default function App() {
               <button
                 type="button"
                 className={`inline-flex items-center gap-1.5 rounded-md px-3 text-sm font-medium transition ${
+                  view === 'review'
+                    ? 'bg-white text-zinc-900 shadow-sm'
+                    : 'text-zinc-500 hover:text-zinc-700'
+                }`}
+                onClick={() => setView('review')}
+              >
+                <BookOpenCheck className="size-4" aria-hidden="true" />
+                错题复盘
+              </button>
+              <button
+                type="button"
+                className={`inline-flex items-center gap-1.5 rounded-md px-3 text-sm font-medium transition ${
                   view === 'expression'
                     ? 'bg-white text-zinc-900 shadow-sm'
                     : 'text-zinc-500 hover:text-zinc-700'
@@ -384,19 +403,27 @@ export default function App() {
                   cumulativeMistakeCount={mistakes.length}
                   onRetryMistakes={handlePaperReady}
                   onBackToSetup={() => setQuizPhase('setup')}
+                  onOpenReview={() => setView('review')}
                 />
               )}
             </div>
 
             <aside className="order-2 min-w-0 space-y-5 xl:order-3">
               <MistakeBook
-                mistakes={mistakes}
                 progress={progress}
-                onMistakesChange={setMistakes}
+                reviewDueCount={reviewDashboard?.due_count ?? 0}
+                onOpenReview={() => setView('review')}
               />
             </aside>
           </div>
           </>
+        )}
+
+        {view === 'review' && (
+          <WrongReviewPage
+            onPaperReady={handlePaperReady}
+            onBackToQuiz={() => setView('quiz')}
+          />
         )}
 
         {view === 'expression' && (

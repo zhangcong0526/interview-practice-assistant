@@ -17,6 +17,8 @@ import type {
   QuizPaper,
   QuizProgress,
   QuizTopic,
+  ReviewDashboard,
+  ReviewRecord,
   ResumeAdvice,
   ExpressionProgress,
   ExpressionQuestion,
@@ -482,6 +484,34 @@ export async function deleteMistake(key: string): Promise<void> {
 
 export async function getQuizProgress(): Promise<QuizProgress> {
   return apiFetch<QuizProgress>('/quiz/progress')
+}
+
+export async function getReviewDashboard(): Promise<ReviewDashboard> {
+  return apiFetch<ReviewDashboard>('/quiz/review/dashboard')
+}
+
+export async function listReviewRecords(): Promise<ReviewRecord[]> {
+  const data = await apiFetch<{ records: ReviewRecord[] }>('/quiz/review/mistakes')
+  return data.records ?? []
+}
+
+export async function saveReviewErrorCause(
+  reviewId: string,
+  cause: string,
+): Promise<void> {
+  await apiFetch(`/quiz/review/${encodeURIComponent(reviewId)}/error-causes`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cause }),
+  })
+}
+
+export async function generateReviewPractice(
+  topicId: string,
+): Promise<QuizPaper> {
+  return apiFetch<QuizPaper>(`/quiz/review/tasks/${encodeURIComponent(topicId)}/practice`, {
+    method: 'POST',
+  })
 }
 
 export async function getExpressionQuestion(roleKey: string): Promise<ExpressionQuestion> {

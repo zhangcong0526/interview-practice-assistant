@@ -15,6 +15,7 @@ from .routers import (
     knowledge,
     quiz,
     resume,
+    review,
     tts,
     uploads,
 )
@@ -58,6 +59,7 @@ app.include_router(knowledge.router)
 app.include_router(interview.router)
 app.include_router(resume.router)
 app.include_router(quiz.router)
+app.include_router(review.router)
 app.include_router(tts.router)
 app.include_router(expression.router)
 

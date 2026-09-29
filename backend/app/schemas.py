@@ -133,6 +133,10 @@ class QuizSubmitRequest(BaseModel):
     answers: dict[str, list[str]] = Field(default_factory=dict)
 
 
+class ReviewErrorCauseRequest(BaseModel):
+    cause: str = Field(pattern="^(概念不清|概念混淆|粗心|超纲)$")
+
+
 class TTSRequest(BaseModel):
     text: str = Field(min_length=1, max_length=2000)
     voice: str = ""

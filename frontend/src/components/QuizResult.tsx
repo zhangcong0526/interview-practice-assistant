@@ -1,6 +1,7 @@
 import {
   AlertTriangle,
   ArrowRight,
+  BookOpenCheck,
   BookMarked,
   CheckCircle2,
   GitBranch,
@@ -24,6 +25,7 @@ interface QuizResultProps {
   cumulativeMistakeCount: number
   onRetryMistakes: (paper: QuizPaper) => void
   onBackToSetup: () => void
+  onOpenReview: () => void
 }
 
 const LEVEL_LABEL: Record<MasteryLevel, string> = {
@@ -46,8 +48,10 @@ export function QuizResult({
   cumulativeMistakeCount,
   onRetryMistakes,
   onBackToSetup,
+  onOpenReview,
 }: QuizResultProps) {
   const [busy, setBusy] = useState(false)
+  const [topicBusy, setTopicBusy] = useState('')
   const [error, setError] = useState('')
   const [mistakeScope, setMistakeScope] = useState<MistakeQuizScope>('current')
   const { review } = attempt
@@ -89,6 +93,37 @@ export function QuizResult({
     } catch (retryError) {
       setError(retryError instanceof Error ? retryError.message : '错题重练组卷失败。')
       setBusy(false)
+    }
+  }
+
+  const handleTopicRedo = async (topic: string) => {
+    if (topicBusy) return
+    setTopicBusy(topic)
+    setError('')
+    try {
+      onRetryMistakes(
+        await generateMistakePaper({
+          scope: 'all',
+          limit: 1,
+          difficulty: 'mixed',
+          time_range: 'all',
+          topics: [topic],
+          total: 5,
+        }),
+      )
+    } catch (redoError) {
+      setError(redoError instanceof Error ? redoError.message : '知识点重练组卷失败。')
+    } finally {
+      setTopicBusy('')
+    }
+  }
+
+  const handleConsolidate = () => {
+    const topic = guide?.focus_topics[0]?.topic
+    if (topic) {
+      void handleTopicRedo(topic)
+    } else {
+      void handleRetry()
     }
   }
 
@@ -150,6 +185,21 @@ export function QuizResult({
               </p>
             )}
           </div>
+          {!review.can_advance && (
+            <button
+              type="button"
+              className="primary-btn shrink-0 px-3 py-2 text-xs"
+              onClick={handleConsolidate}
+              disabled={busy || Boolean(topicBusy)}
+            >
+              {topicBusy ? (
+                <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+              ) : (
+                <Target className="size-3.5" aria-hidden="true" />
+              )}
+              开始巩固
+            </button>
+          )}
         </div>
 
         {guide && (
@@ -214,6 +264,19 @@ export function QuizResult({
                       <p className="mt-1 text-xs leading-5 text-emerald-800">
                         {topic.recommended_action}
                       </p>
+                      <button
+                        type="button"
+                        className="mt-2 inline-flex items-center gap-1 rounded-md bg-emerald-600 px-2 py-1 text-[11px] font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-60"
+                        onClick={() => void handleTopicRedo(topic.topic)}
+                        disabled={Boolean(topicBusy)}
+                      >
+                        {topicBusy === topic.topic ? (
+                          <Loader2 className="size-3 animate-spin" aria-hidden="true" />
+                        ) : (
+                          <RotateCcw className="size-3" aria-hidden="true" />
+                        )}
+                        去重做
+                      </button>
                     </li>
                   ))}
                 </ul>
@@ -281,6 +344,17 @@ export function QuizResult({
           <button type="button" className="secondary-btn" onClick={onBackToSetup}>
             <BookMarked className="size-4" aria-hidden="true" />
             换知识点组卷
+          </button>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-emerald-50 px-3 py-2.5 text-xs text-emerald-800">
+          <span>本次错题与薄弱知识点已同步到错题复盘。</span>
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 font-semibold text-emerald-700 transition hover:text-emerald-800"
+            onClick={onOpenReview}
+          >
+            <BookOpenCheck className="size-3.5" aria-hidden="true" />
+            查看复盘
           </button>
         </div>
         {error && <p className="mt-3 text-sm leading-5 text-red-600">{error}</p>}

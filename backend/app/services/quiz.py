@@ -18,6 +18,7 @@ from ..config import settings
 from .. import prompts
 from . import knowledge as knowledge_service
 from . import llm as llm_service
+from . import review as review_service
 
 
 class QuizError(RuntimeError):
@@ -2700,6 +2701,7 @@ def grade(paper_id: str, answers: dict[str, list[str]]) -> dict:
 
     topic_stats = _update_mastery(graded)
     _update_mistakes(graded, paper)
+    review_service.sync_grade(graded, paper)
     review_sources = _collect_review_sources(graded, topic_stats, paper)
 
     history = [
@@ -3085,6 +3087,7 @@ def delete_mistake(key: str) -> None:
     if len(remaining) == len(mistakes):
         raise QuizError("错题不存在。")
     _write_json(MISTAKES_FILE, remaining)
+    review_service.archive_by_question_key(key)
 
 
 def list_weak_topics(limit: int = 10, threshold: float = 0.8) -> list[dict]:

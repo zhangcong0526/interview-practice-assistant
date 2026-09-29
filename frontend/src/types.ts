@@ -545,6 +545,62 @@ export interface MistakeItem {
   last_seen_at: number
 }
 
+export type ReviewStatus = 'active' | 'graduated' | 'archived'
+
+export interface ReviewSourceLineage {
+  paper_id?: string
+  source_doc_id?: string
+  source_docs?: { doc_id?: string; title?: string }[]
+  source_chunk_ids?: string[]
+  paper_doc_ids?: string[]
+  paper_doc_titles?: string[]
+}
+
+export interface ReviewRecord {
+  review_id: string
+  question_id: string
+  question_key: string
+  topic: string
+  topic_id: string
+  type: QuestionType
+  stem: string
+  options: QuizOption[]
+  correct_answer: string[]
+  correct_answer_text?: string
+  explanation?: string
+  source_title?: string
+  source_lineage?: ReviewSourceLineage
+  status: ReviewStatus
+  review_stage: number
+  review_pass_count: number
+  next_review_at: number
+  last_review_at: number
+  error_causes?: string[]
+  error_causes_history?: { cause: string; marked_at: number }[]
+  wrong_count: number
+  graduated_count?: number
+  created_at: number
+  updated_at: number
+}
+
+export interface ReviewTask {
+  topic_id: string
+  topic: string
+  due_count: number
+  review_ids: string[]
+  source_docs?: string[]
+  records: ReviewRecord[]
+}
+
+export interface ReviewDashboard {
+  due_count: number
+  active_count: number
+  graduated_count: number
+  archived_count: number
+  tasks: ReviewTask[]
+  updated_at: number
+}
+
 export interface TopicProgress {
   topic: string
   total: number

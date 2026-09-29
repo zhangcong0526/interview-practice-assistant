@@ -1470,27 +1470,141 @@ def _all_mistake_topics(limit: int) -> list[str]:
     return topics
 
 
+def _filter_mistakes_by_time(
+    mistakes: list[dict],
+    time_range: str,
+    attempt_id: str = "",
+) -> tuple[list[dict], str]:
+    """按时间档位过滤错题；last 表示最近一次答卷对应的错题。"""
+    if time_range == "last":
+        resolved_attempt_id = attempt_id or _latest_attempt_id()
+        if not resolved_attempt_id:
+            raise QuizError("还没有可用于重做的答卷，请先完成一套题。")
+        attempt = get_attempt(resolved_attempt_id)
+        paper_id = str(attempt.get("paper_id") or "")
+        if not paper_id:
+            raise QuizError("最近答卷缺少试卷编号，无法定位上次错题。")
+        filtered = [item for item in mistakes if str(item.get("paper_id") or "") == paper_id]
+        return filtered, resolved_attempt_id
+
+    if time_range in ("1d", "7d"):
+        window_seconds = 86_400 if time_range == "1d" else 7 * 86_400
+        threshold = int(time.time()) - window_seconds
+        filtered = [
+            item
+            for item in mistakes
+            if max(int(item.get("last_seen_at") or 0), int(item.get("created_at") or 0)) >= threshold
+        ]
+        return filtered, attempt_id
+
+    return mistakes, attempt_id
+
+
+def _type_preserving_plan(
+    mistakes: list[dict], total: int
+) -> tuple[dict[str, int], list[dict]]:
+    """优先复现错题题型分布；可用错题不足时按原比例扩容。"""
+    ordered = sorted(
+        mistakes,
+        key=lambda item: (
+            int(item.get("wrong_count") or 0),
+            int(item.get("last_seen_at") or 0),
+            int(item.get("created_at") or 0),
+        ),
+        reverse=True,
+    )
+    picked = ordered[:total]
+    counts = {qtype: 0 for qtype in VALID_TYPES}
+    for item in picked:
+        qtype = str(item.get("type") or "").strip().lower()
+        counts[qtype if qtype in counts else "single"] += 1
+
+    base_total = sum(counts.values())
+    if base_total and base_total < total:
+        remaining = total - base_total
+        quotas = {
+            qtype: counts[qtype] / base_total * remaining
+            for qtype in VALID_TYPES
+            if counts[qtype]
+        }
+        for qtype, quota in quotas.items():
+            counts[qtype] += int(quota)
+            quotas[qtype] = quota - int(quota)
+        for qtype, _ in sorted(
+            quotas.items(),
+            key=lambda pair: (-pair[1], VALID_TYPES.index(pair[0])),
+        )[: max(0, total - sum(counts.values()))]:
+            counts[qtype] += 1
+
+    return counts, picked
+
+
+def _mistake_item_doc_ids(items: list[dict]) -> list[str]:
+    """从本次实际选中的错题收集来源文档，不向无关资料扩散。"""
+    valid_doc_ids = {
+        doc["doc_id"] for doc in knowledge_service.list_documents() if doc.get("doc_id")
+    }
+    doc_ids: list[str] = []
+    for item in items:
+        candidates = [str(item.get("source_doc_id") or "")]
+        candidates.extend(
+            str(doc.get("doc_id") or "") for doc in item.get("source_docs") or []
+        )
+        for doc_id in candidates:
+            if doc_id and doc_id in valid_doc_ids and doc_id not in doc_ids:
+                doc_ids.append(doc_id)
+    return doc_ids
+
+
 def generate_mistake_paper(
     limit: int = 8,
     difficulty: str = "mixed",
     scope: str = "current",
     attempt_id: str = "",
+    time_range: str = "all",
+    topics: list[str] | None = None,
+    total: int | None = None,
 ) -> dict:
     """按本次错题或累计错题的知识点重新生成变形题。"""
     source_attempt_id = attempt_id or (_latest_attempt_id() if scope == "current" else "")
     if scope == "current":
         topics = _current_mistake_topics(attempt_id, limit)
+        doc_ids = _mistake_source_doc_ids(topics)
+        counts = {
+            "single": max(2, min(5, len(topics))),
+            "multiple": 2,
+            "judge": 2,
+        }
+        if sum(counts.values()) > MAX_QUESTIONS:
+            counts["judge"] = max(0, MAX_QUESTIONS - counts["single"] - counts["multiple"])
     else:
-        topics = _all_mistake_topics(limit)
-    doc_ids = _mistake_source_doc_ids(topics)
-    counts = {
-        "single": max(2, min(5, len(topics))),
-        "multiple": 2,
-        "judge": 2,
-    }
-    total = sum(counts.values())
-    if total > MAX_QUESTIONS:
-        counts["judge"] = max(0, MAX_QUESTIONS - counts["single"] - counts["multiple"])
+        mistakes = list_mistakes(limit=10_000)
+        if not mistakes:
+            raise QuizError("累计错题本是空的，先去做一份测验吧。")
+        filtered, source_attempt_id = _filter_mistakes_by_time(
+            mistakes, time_range, attempt_id
+        )
+        wanted_topics = {_normalise_topic_key(item) for item in (topics or []) if item}
+        if wanted_topics:
+            filtered = [
+                item
+                for item in filtered
+                if _normalise_topic_key(str(item.get("topic") or "")) in wanted_topics
+            ]
+        if not filtered:
+            raise QuizError("所选时间或知识点范围内没有错题，请调整范围。")
+
+        requested_total = total if total is not None else max(1, limit)
+        counts, picked_mistakes = _type_preserving_plan(filtered, requested_total)
+        topics = []
+        for item in picked_mistakes:
+            topic = str(item.get("topic") or "未分类")
+            if topic not in topics:
+                topics.append(topic)
+        doc_ids = _mistake_item_doc_ids(picked_mistakes)
+        if not doc_ids:
+            doc_ids = _mistake_source_doc_ids(topics)
+
     paper = generate_paper(
         topics,
         doc_ids,
@@ -1504,6 +1618,10 @@ def generate_mistake_paper(
         "kind": "mistake_redo",
         "scope": scope,
         "source_attempt_id": source_attempt_id,
+        "time_range": time_range if scope == "all" else "",
+        "requested_total": total if scope == "all" and total is not None else None,
+        "selected_topics": list(topics or []),
+        "question_type_plan": dict(counts),
     }
     _write_json(PAPERS_DIR / f"{paper['paper_id']}.json", paper)
     return paper

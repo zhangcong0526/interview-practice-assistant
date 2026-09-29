@@ -7,12 +7,11 @@ import {
   Lightbulb,
   Loader2,
   RotateCcw,
-  Sparkles,
   Target,
   XCircle,
 } from 'lucide-react'
 import { useState } from 'react'
-import { generateMistakePaper, generateQuizPaper } from '../api'
+import { generateMistakePaper } from '../api'
 import type {
   MasteryLevel,
   MistakeQuizScope,
@@ -49,7 +48,6 @@ export function QuizResult({
   onBackToSetup,
 }: QuizResultProps) {
   const [busy, setBusy] = useState(false)
-  const [nextBusy, setNextBusy] = useState(false)
   const [error, setError] = useState('')
   const [mistakeScope, setMistakeScope] = useState<MistakeQuizScope>('current')
   const { review } = attempt
@@ -84,33 +82,13 @@ export function QuizResult({
           attempt_id: mistakeScope === 'current' ? attempt.attempt_id : '',
           limit: 8,
           difficulty: 'mixed',
+          time_range: 'all',
+          total: mistakeScope === 'all' ? 20 : undefined,
         }),
       )
     } catch (retryError) {
       setError(retryError instanceof Error ? retryError.message : '错题重练组卷失败。')
       setBusy(false)
-    }
-  }
-
-  const handleSuggestedPaper = async () => {
-    if (!guide || nextBusy) return
-    setNextBusy(true)
-    setError('')
-    try {
-      onRetryMistakes(
-        await generateQuizPaper({
-          keywords: guide.next_paper.keywords,
-          doc_ids: [],
-          single: guide.next_paper.single,
-          multiple: guide.next_paper.multiple,
-          judge: guide.next_paper.judge,
-          difficulty: 'mixed',
-          focus_weak: true,
-        }),
-      )
-    } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : '建议组卷失败。')
-      setNextBusy(false)
     }
   }
 
@@ -245,40 +223,6 @@ export function QuizResult({
                     ? "本卷未发现新的薄弱知识点，建议按下一套建议做间隔复习。"
                     : "当前知识点掌握稳定，可以做一套混合卷保持手感。"}
                 </p>
-              )}
-            </div>
-
-            <div className="mt-3 rounded-lg bg-white px-3 py-2 ring-1 ring-zinc-200">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-xs font-semibold text-zinc-700">下一套建议</p>
-                {guide.next_paper.keywords.length > 0 && (
-                  <button
-                    type="button"
-                    className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-60"
-                    onClick={handleSuggestedPaper}
-                    disabled={nextBusy}
-                  >
-                    {nextBusy ? (
-                      <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
-                    ) : (
-                      <Sparkles className="size-3.5" aria-hidden="true" />
-                    )}
-                    一键生成
-                  </button>
-                )}
-              </div>
-              <p className="mt-1 text-xs leading-5 text-zinc-600">{guide.next_paper.reason}</p>
-              <p className="mt-1 text-xs text-zinc-500">
-                建议题量：单选 {guide.next_paper.single} · 多选 {guide.next_paper.multiple} · 判断 {guide.next_paper.judge}
-              </p>
-              {guide.next_paper.keywords.length > 0 && (
-                <div className="mt-1.5 flex flex-wrap gap-1.5">
-                  {guide.next_paper.keywords.map((keyword) => (
-                    <span key={keyword} className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-700">
-                      {keyword}
-                    </span>
-                  ))}
-                </div>
               )}
             </div>
 

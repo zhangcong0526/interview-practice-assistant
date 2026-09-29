@@ -505,6 +505,7 @@ export interface MistakeItem {
   explanation: string
   source_title: string
   paper_title: string
+  paper_id?: string
   wrong_count: number
   correct_streak: number
   created_at: number
@@ -553,10 +554,14 @@ export interface QuizGenerateRequest {
 }
 
 export type MistakeQuizScope = 'current' | 'all'
+export type MistakeTimeRange = 'last' | '1d' | '7d' | 'all'
 
 export interface MistakePaperRequest {
   scope: MistakeQuizScope
   attempt_id?: string
   limit?: number
   difficulty?: string
+  time_range?: MistakeTimeRange
+  topics?: string[]
+  total?: number
 }

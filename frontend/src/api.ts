@@ -451,6 +451,9 @@ export async function generateMistakePaper(
       difficulty: request.difficulty ?? 'mixed',
       scope: request.scope,
       attempt_id: request.attempt_id ?? '',
+      time_range: request.time_range ?? 'all',
+      topics: request.topics ?? [],
+      total: request.total ?? null,
     }),
   })
 }
@@ -467,7 +470,7 @@ export async function submitQuiz(
 }
 
 export async function listMistakes(): Promise<MistakeItem[]> {
-  return apiFetch<MistakeItem[]>('/quiz/mistakes')
+  return apiFetch<MistakeItem[]>('/quiz/mistakes?limit=500')
 }
 
 export async function deleteMistake(key: string): Promise<void> {

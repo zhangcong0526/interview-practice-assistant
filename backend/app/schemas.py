@@ -107,6 +107,9 @@ class MistakeQuizRequest(BaseModel):
     difficulty: str = "mixed"
     scope: str = Field(default="current", pattern="^(current|all)$")
     attempt_id: str = ""
+    time_range: str = Field(default="all", pattern="^(last|1d|7d|all)$")
+    topics: list[str] = Field(default_factory=list)
+    total: int | None = Field(default=None, ge=1, le=30)
 
 
 class ExpressionQuestionRequest(BaseModel):

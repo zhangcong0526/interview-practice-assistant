@@ -51,6 +51,9 @@ async def generate_mistake_paper(req: MistakeQuizRequest):
             req.difficulty,
             req.scope,
             req.attempt_id,
+            req.time_range,
+            req.topics,
+            req.total,
         )
     except quiz_service.QuizError as exc:
         raise HTTPException(422, str(exc))
@@ -76,7 +79,7 @@ async def get_attempt(attempt_id: str):
 
 
 @router.get("/mistakes")
-async def list_mistakes(limit: int = Query(default=100, ge=1, le=500)):
+async def list_mistakes(limit: int = Query(default=1000, ge=1, le=5000)):
     return quiz_service.list_mistakes(limit)
 
 

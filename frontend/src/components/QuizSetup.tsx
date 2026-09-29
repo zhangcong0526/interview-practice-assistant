@@ -6,7 +6,6 @@ import {
   RefreshCw,
   RotateCcw,
   Search,
-  Sparkles,
   Tags,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -14,10 +13,13 @@ import {
   extractQuizTopics,
   generateMistakePaper,
   generateQuizPaper,
+  listMistakes,
 } from '../api'
 import type {
   KnowledgeDocument,
+  MistakeItem,
   MistakeQuizScope,
+  MistakeTimeRange,
   QuizPaper,
   QuizProgress,
   QuizTopic,
@@ -34,6 +36,13 @@ const DIFFICULTIES: { value: string; label: string }[] = [
   { value: 'easy', label: '基础' },
   { value: 'mixed', label: '混合' },
   { value: 'hard', label: '进阶' },
+]
+
+const MISTAKE_TIME_RANGES: { value: MistakeTimeRange; label: string }[] = [
+  { value: 'last', label: '上次错题' },
+  { value: '1d', label: '近1天' },
+  { value: '7d', label: '近7天' },
+  { value: 'all', label: '累计' },
 ]
 
 // 单次组卷上限与后端保持一致（单份最多 30 道）。
@@ -57,8 +66,15 @@ export function QuizSetup({
   const [loadingTopics, setLoadingTopics] = useState(false)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
-  const [mistakeScope, setMistakeScope] = useState<MistakeQuizScope>('current')
+  const [mistakePanelOpen, setMistakePanelOpen] = useState(false)
+  const [mistakes, setMistakes] = useState<MistakeItem[]>([])
+  const [mistakesLoaded, setMistakesLoaded] = useState(false)
+  const [loadingMistakes, setLoadingMistakes] = useState(false)
+  const [mistakeTimeRange, setMistakeTimeRange] = useState<MistakeTimeRange>('all')
+  const [selectedMistakeTopics, setSelectedMistakeTopics] = useState<string[]>([])
+  const [mistakeTotal, setMistakeTotal] = useState(20)
   const topicsRequestRef = useRef(0)
+  const mistakesRequestRef = useRef(0)
   const latestAttempt = progress?.recent_attempts?.[0] ?? null
   const currentMistakeCount = latestAttempt
     ? Math.max(0, latestAttempt.total - latestAttempt.correct_count)
@@ -118,6 +134,14 @@ export function QuizSetup({
     )
   }
 
+  const toggleMistakeTopic = (topic: string) => {
+    setSelectedMistakeTopics((current) =>
+      current.includes(topic)
+        ? current.filter((item) => item !== topic)
+        : [...current, topic],
+    )
+  }
+
   const toggleCategory = (category: string, items: QuizTopic[]) => {
     const keys = items.map((item) => item.keyword)
     const allChosen = keys.every((key) => selected.includes(key))
@@ -136,6 +160,65 @@ export function QuizSetup({
         : [...current, docId],
     )
   }
+
+  const loadMistakes = async () => {
+    const request = ++mistakesRequestRef.current
+    setLoadingMistakes(true)
+    setError('')
+    try {
+      const next = await listMistakes()
+      if (request !== mistakesRequestRef.current) return
+      setMistakes(next)
+      setMistakesLoaded(true)
+    } catch (loadError) {
+      if (request !== mistakesRequestRef.current) return
+      setError(loadError instanceof Error ? loadError.message : '错题本加载失败。')
+    } finally {
+      if (request === mistakesRequestRef.current) {
+        setLoadingMistakes(false)
+      }
+    }
+  }
+
+  useEffect(() => {
+    if (!mistakePanelOpen) return
+    void loadMistakes()
+  }, [mistakePanelOpen])
+
+  const filteredMistakes = useMemo(() => {
+    if (!mistakesLoaded) return []
+    if (mistakeTimeRange === 'last') {
+      const paperId = latestAttempt?.paper_id ?? ''
+      return mistakes.filter((item) => item.paper_id === paperId)
+    }
+    if (mistakeTimeRange === '1d' || mistakeTimeRange === '7d') {
+      const windowSeconds = mistakeTimeRange === '1d' ? 86_400 : 7 * 86_400
+      const threshold = Math.floor(Date.now() / 1000) - windowSeconds
+      return mistakes.filter(
+        (item) => Math.max(item.last_seen_at || 0, item.created_at || 0) >= threshold,
+      )
+    }
+    return mistakes
+  }, [latestAttempt?.paper_id, mistakeTimeRange, mistakes, mistakesLoaded])
+
+  const mistakeTopicOptions = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const item of filteredMistakes) {
+      const topic = item.topic || '未分类'
+      counts.set(topic, (counts.get(topic) || 0) + 1)
+    }
+    return [...counts.entries()]
+      .map(([topic, count]) => ({ topic, count }))
+      .sort((left, right) => right.count - left.count || left.topic.localeCompare(right.topic))
+  }, [filteredMistakes])
+
+  const mistakeTopicKey = mistakeTopicOptions.map((item) => item.topic).join('\u0000')
+
+  useEffect(() => {
+    if (!mistakesLoaded) return
+    const available = new Set(mistakeTopicKey ? mistakeTopicKey.split('\u0000') : [])
+    setSelectedMistakeTopics((current) => current.filter((topic) => available.has(topic)))
+  }, [mistakeTopicKey, mistakesLoaded])
 
   const total = single + multiple + judge
   const overLimit = total > MAX_TOTAL_QUESTIONS
@@ -170,16 +253,15 @@ export function QuizSetup({
     }
   }
 
-  const handleMistakeQuiz = async () => {
-    const availableCount = mistakeScope === 'current' ? currentMistakeCount : mistakeCount
-    if (busy || availableCount === 0) return
-    setBusy('mistake')
+  const handleMistakeQuiz = async (scope: MistakeQuizScope) => {
+    if (busy || scope !== 'current' || currentMistakeCount === 0) return
+    setBusy('mistake-current')
     setError('')
     try {
       onPaperReady(
         await generateMistakePaper({
-          scope: mistakeScope,
-          attempt_id: mistakeScope === 'current' ? latestAttempt?.attempt_id ?? '' : '',
+          scope,
+          attempt_id: scope === 'current' ? latestAttempt?.attempt_id ?? '' : '',
           limit: 8,
           difficulty,
         }),
@@ -191,25 +273,26 @@ export function QuizSetup({
     }
   }
 
-  const handleSuggestedQuiz = async () => {
-    const suggestion = progress?.next_paper
-    if (!suggestion || suggestion.keywords.length === 0 || busy) return
-    setBusy('suggested')
+  const handleCustomMistakeQuiz = async () => {
+    if (busy || filteredMistakes.length === 0) return
+    if (mistakeTotal < 1 || mistakeTotal > MAX_TOTAL_QUESTIONS) {
+      setError(`错题重练题量需在 1 到 ${MAX_TOTAL_QUESTIONS} 道之间。`)
+      return
+    }
+    setBusy('mistake-all')
     setError('')
     try {
       onPaperReady(
-        await generateQuizPaper({
-          keywords: suggestion.keywords,
-          doc_ids: [],
-          single: suggestion.single,
-          multiple: suggestion.multiple,
-          judge: suggestion.judge,
-          difficulty: 'mixed',
-          focus_weak: true,
+        await generateMistakePaper({
+          scope: 'all',
+          time_range: mistakeTimeRange,
+          topics: selectedMistakeTopics,
+          total: mistakeTotal,
+          difficulty,
         }),
       )
     } catch (generateError) {
-      setError(generateError instanceof Error ? generateError.message : '建议组卷失败。')
+      setError(generateError instanceof Error ? generateError.message : '错题重练组卷失败。')
     } finally {
       setBusy('')
     }
@@ -240,60 +323,40 @@ export function QuizSetup({
           选择知识点组卷
         </h2>
         <div className="flex flex-wrap items-center gap-2">
-          {(currentMistakeCount > 0 || mistakeCount > 0) && (
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="inline-flex rounded-lg border border-zinc-300 bg-zinc-100 p-0.5">
-                <button
-                  type="button"
-                  className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition disabled:opacity-50 ${
-                    mistakeScope === 'current'
-                      ? 'bg-white text-zinc-900 shadow-sm'
-                      : 'text-zinc-500 hover:text-zinc-700'
-                  }`}
-                  onClick={() => setMistakeScope('current')}
-                  disabled={currentMistakeCount === 0}
-                  aria-pressed={mistakeScope === 'current'}
-                >
-                  本次错题（{currentMistakeCount}）
-                </button>
-                <button
-                  type="button"
-                  className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition disabled:opacity-50 ${
-                    mistakeScope === 'all'
-                      ? 'bg-white text-zinc-900 shadow-sm'
-                      : 'text-zinc-500 hover:text-zinc-700'
-                  }`}
-                  onClick={() => setMistakeScope('all')}
-                  disabled={mistakeCount === 0}
-                  aria-pressed={mistakeScope === 'all'}
-                >
-                  累计错题（{mistakeCount}）
-                </button>
-              </div>
-              <button
-                type="button"
-                className="secondary-btn px-3 py-2 text-xs"
-                onClick={handleMistakeQuiz}
-                disabled={
-                  Boolean(busy) ||
-                  (mistakeScope === 'current'
-                    ? currentMistakeCount === 0
-                    : mistakeCount === 0)
-                }
-                title={mistakeScope === 'current' ? '按本卷错题知识点生成变形题' : '按错题本未巩固知识点组卷'}
-              >
-                {busy === 'mistake' ? (
-                  <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
-                ) : (
-                  <RotateCcw className="size-3.5" aria-hidden="true" />
-                )}
-                {busy === 'mistake'
-                  ? '正在生成变形题'
-                  : mistakeScope === 'current'
-                    ? '本次错题变形练'
-                    : '累计错题重练'}
-              </button>
-            </div>
+          {currentMistakeCount > 0 && (
+            <button
+              type="button"
+              className="secondary-btn px-3 py-2 text-xs"
+              onClick={() => handleMistakeQuiz('current')}
+              disabled={Boolean(busy)}
+              title="按本卷错题知识点生成变形题"
+            >
+              {busy === 'mistake-current' ? (
+                <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+              ) : (
+                <RotateCcw className="size-3.5" aria-hidden="true" />
+              )}
+              {busy === 'mistake-current'
+                ? '正在生成变形题'
+                : `本次错题变形练（${currentMistakeCount}）`}
+            </button>
+          )}
+          {mistakeCount > 0 && (
+            <button
+              type="button"
+              className="secondary-btn px-3 py-2 text-xs"
+              onClick={() => setMistakePanelOpen((current) => !current)}
+              disabled={Boolean(busy)}
+              aria-expanded={mistakePanelOpen}
+              title="选择时间范围、知识点和题量后重练错题"
+            >
+              {busy === 'mistake-all' ? (
+                <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+              ) : (
+                <RotateCcw className="size-3.5" aria-hidden="true" />
+              )}
+              {busy === 'mistake-all' ? '正在生成重练卷' : '自定义错题重练'}
+            </button>
           )}
           <button
             type="button"
@@ -312,45 +375,109 @@ export function QuizSetup({
         </div>
       </div>
 
-      {progress?.next_paper && progress.next_paper.keywords.length > 0 && (
-        <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3.5">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="flex items-center gap-1.5 text-sm font-semibold text-emerald-900">
-                <Sparkles className="size-4" aria-hidden="true" />
-                按当前薄弱点建议组卷
+      {mistakePanelOpen && (
+        <div className="mt-4 rounded-lg border border-zinc-200 bg-zinc-50 p-3.5">
+          <div>
+            <span className="field-label">时间范围</span>
+            <div className="flex flex-wrap gap-1.5">
+              {MISTAKE_TIME_RANGES.map((item) => (
+                <button
+                  key={item.value}
+                  type="button"
+                  className={`rounded-lg border px-2.5 py-1.5 text-xs transition ${
+                    mistakeTimeRange === item.value
+                      ? 'border-emerald-500 bg-emerald-600 text-white'
+                      : 'border-zinc-300 bg-white text-zinc-700 hover:border-emerald-400'
+                  }`}
+                  onClick={() => setMistakeTimeRange(item.value)}
+                  aria-pressed={mistakeTimeRange === item.value}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-3">
+            <span className="field-label">知识点标签</span>
+            {loadingMistakes && !mistakesLoaded ? (
+              <p className="flex items-center gap-2 text-sm text-zinc-500">
+                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                正在读取错题本
               </p>
-              <p className="mt-1 text-xs leading-5 text-emerald-800">
-                {progress.next_paper.reason}
-              </p>
-              <p className="mt-1 text-xs text-emerald-700">
-                单选 {progress.next_paper.single} · 多选 {progress.next_paper.multiple} · 判断{' '}
-                {progress.next_paper.judge}
-              </p>
+            ) : mistakeTopicOptions.length === 0 ? (
+              <p className="text-sm text-zinc-500">当前时间范围内没有错题。</p>
+            ) : (
+              <>
+                <ul className="flex max-h-36 flex-wrap gap-1.5 overflow-y-auto rounded-lg border border-zinc-200 bg-white p-2">
+                  {mistakeTopicOptions.map((option) => {
+                    const chosen = selectedMistakeTopics.includes(option.topic)
+                    return (
+                      <li key={option.topic}>
+                        <button
+                          type="button"
+                          className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs transition ${
+                            chosen
+                              ? 'border-emerald-500 bg-emerald-600 text-white'
+                              : 'border-zinc-300 bg-white text-zinc-700 hover:border-emerald-400'
+                          }`}
+                          onClick={() => toggleMistakeTopic(option.topic)}
+                          aria-pressed={chosen}
+                        >
+                          {chosen && <Check className="size-3.5" aria-hidden="true" />}
+                          {option.topic}（{option.count}）
+                        </button>
+                      </li>
+                    )
+                  })}
+                </ul>
+                <p className="mt-1.5 text-xs text-zinc-500">
+                  不选知识点时使用当前时间范围内的全部错题。
+                </p>
+              </>
+            )}
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-end justify-between gap-3">
+            <div className="w-28">
+              <label htmlFor="mistake-total" className="field-label">
+                目标题量
+              </label>
+              <input
+                id="mistake-total"
+                type="number"
+                min={1}
+                max={MAX_TOTAL_QUESTIONS}
+                className="text-input"
+                value={mistakeTotal}
+                onChange={(event) =>
+                  setMistakeTotal(
+                    Math.min(
+                      MAX_TOTAL_QUESTIONS,
+                      Math.max(1, Number(event.target.value) || 1),
+                    ),
+                  )
+                }
+              />
             </div>
             <button
               type="button"
-              className="shrink-0 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-60"
-              onClick={handleSuggestedQuiz}
-              disabled={Boolean(busy)}
+              className="primary-btn px-4 py-2 text-xs"
+              onClick={handleCustomMistakeQuiz}
+              disabled={Boolean(busy) || loadingMistakes || filteredMistakes.length === 0}
             >
-              {busy === 'suggested' ? (
+              {busy === 'mistake-all' ? (
                 <Loader2 className="size-4 animate-spin" aria-hidden="true" />
               ) : (
-                '一键生成'
+                <RotateCcw className="size-4" aria-hidden="true" />
               )}
+              生成重练卷
             </button>
           </div>
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {progress.next_paper.keywords.map((keyword) => (
-              <span
-                key={keyword}
-                className="rounded-full bg-white px-2 py-0.5 text-xs text-emerald-800 ring-1 ring-emerald-200"
-              >
-                {keyword}
-              </span>
-            ))}
-          </div>
+          <p className="mt-2 text-xs leading-5 text-zinc-500">
+            已匹配 {filteredMistakes.length} 道错题 · 目标 {mistakeTotal} 道 ·
+            可用错题不足时按原题型比例生成变形题。
+          </p>
         </div>
       )}
 

@@ -1971,10 +1971,15 @@ def _decorate_focus_entry(
 
     plan: list[str] = []
     if source_titles:
-        plan.append("先回读《" + "》《".join(source_titles) + "》里的相关段落。")
+        if len(source_titles) > 2:
+            plan.append(
+                f"先回读《{source_titles[0]}》《{source_titles[1]}》等 {len(source_titles)} 份资料里的相关段落。"
+            )
+        else:
+            plan.append("先回读《" + "》《".join(source_titles) + "》里的相关段落。")
     else:
         plan.append("先回读本知识点对应的原始资料；老数据没有来源时，先用下方解析看懂答案差异。")
-    plan.append("再看下方“错因分析与快速理解”，弄清正确答案为什么成立、你的答案缺了什么。")
+        plan.append("原文档缺口：建议在知识库补齐这段概念后再练一次。")
     for gap in entry["type_gaps"]:
         if gap["status"] == "unpracticed":
             plan.append(f"补 1~2 道{gap['label']}，检查这个概念换题型后是否还讲得清。")

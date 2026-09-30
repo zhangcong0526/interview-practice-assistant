@@ -75,6 +75,40 @@ function formatBytes(bytes: number): string {
   return `${Math.max(1, Math.round(bytes / 1024))} KB`
 }
 
+const EXPRESSION_ROLE_HINTS = {
+  aiTest: [
+    'ai测试', 'ai 代码审计', 'ai代码审计', 'ai缺陷', 'ai辅助用例', 'ai用例',
+    'ai提效', 'ai落地', 'ai替代', '幻觉', '智能体测试', 'agent应用测试',
+    'prompt注入', '评测体系', '黄金标准集',
+  ],
+  aiApp: [
+    'ai应用', '大模型应用', 'llm应用', 'agent应用', 'agent开发', '智能体应用',
+    '智能体开发', 'prompt工程', '结构化输出', 'toolcalls', 'functioncalling',
+    'mcp', '上下文窗口', 'token', 'rag', 'embedding', '向量', '分块', 'chunking',
+    'rerank', '重排', 'top-k', 'ann', '近似最近邻', 'idf', 'tf-idf', '知识库',
+    '模型选型', 'temperature', '微调', 'sft', 'lora', 'langchain', 'langgraph',
+    'agent', 'llm', '大模型', 'transformer', 'deepagent', 'ai 应用开发',
+  ],
+  robot: [
+    '机器人', '整机', '硬件', 'agv', 'amr', 'can', '485', 'ros', 'slam', '雷达', '传感器',
+    'ota', '固件', 'evt', 'dvt', 'pvt', '老化', '导航', '定位', 'iot', '物联网',
+  ],
+  software: [
+    '用例', '自动化', '性能', '压测', '接口', 'ui', 'web', 'app', '小程序', 'ci/cd',
+    '缺陷', '测试流程', 'linux', 'python', '数据库',
+    'okr', 'kpi', '人才梯队', '冲突处理', '沟通表达', '团队管理', '岗位匹配', '离职口径',
+  ],
+}
+
+function inferExpressionRole(topic: string, module?: string): string | undefined {
+  const text = `${module ?? ''} ${topic}`.toLowerCase()
+  if (EXPRESSION_ROLE_HINTS.aiTest.some((term) => text.includes(term))) return 'ai_qa'
+  if (EXPRESSION_ROLE_HINTS.aiApp.some((term) => text.includes(term))) return 'ai_app_dev'
+  if (EXPRESSION_ROLE_HINTS.robot.some((term) => text.includes(term))) return 'robot_hardware'
+  if (EXPRESSION_ROLE_HINTS.software.some((term) => text.includes(term))) return 'software_qa'
+  return undefined
+}
+
 export default function App() {
   const [phase, setPhase] = useState<Phase>('input')
   const [inputMode, setInputMode] = useState<InputMode>('upload')
@@ -99,6 +133,11 @@ export default function App() {
   const [llmConfig, setLlmConfig] = useState<LlmConfig | null>(null)
   const [reviewDashboard, setReviewDashboard] = useState<ReviewDashboard | null>(null)
   const [modelSettingsOpen, setModelSettingsOpen] = useState(false)
+  const [expressionSeed, setExpressionSeed] = useState<{
+    topic: string
+    roleKey?: string
+    token: number
+  } | null>(null)
 
   useEffect(() => {
     window.localStorage.setItem('opc-jd', jd)
@@ -146,6 +185,17 @@ export default function App() {
     setAttempt(null)
     setQuizPhase('running')
     setView('quiz')
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }, [])
+
+  const openReview = useCallback(() => {
+    setView('review')
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }, [])
+
+  const openExpressionTopic = useCallback((topic: string, module?: string) => {
+    setExpressionSeed({ topic, roleKey: inferExpressionRole(topic, module), token: Date.now() })
+    setView('expression')
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }, [])
 
@@ -301,7 +351,7 @@ export default function App() {
                     ? 'bg-white text-zinc-900 shadow-sm'
                     : 'text-zinc-500 hover:text-zinc-700'
                 }`}
-                onClick={() => setView('review')}
+                onClick={openReview}
               >
                 <BookOpenCheck className="size-4" aria-hidden="true" />
                 错题复盘
@@ -313,7 +363,10 @@ export default function App() {
                     ? 'bg-white text-zinc-900 shadow-sm'
                     : 'text-zinc-500 hover:text-zinc-700'
                 }`}
-                onClick={() => setView('expression')}
+                onClick={() => {
+                  setExpressionSeed(null)
+                  setView('expression')
+                }}
               >
                 <Mic className="size-4" aria-hidden="true" />
                 表达训练
@@ -404,7 +457,7 @@ export default function App() {
                   cumulativeMistakeCount={mistakes.length}
                   onRetryMistakes={handlePaperReady}
                   onBackToSetup={() => setQuizPhase('setup')}
-                  onOpenReview={() => setView('review')}
+                  onOpenExpression={openExpressionTopic}
                 />
               )}
             </div>
@@ -413,7 +466,8 @@ export default function App() {
               <MistakeBook
                 progress={progress}
                 reviewDueCount={reviewDashboard?.due_count ?? 0}
-                onOpenReview={() => setView('review')}
+                onOpenReview={openReview}
+                onPaperReady={handlePaperReady}
               />
             </aside>
           </div>
@@ -423,13 +477,20 @@ export default function App() {
         {view === 'review' && (
           <WrongReviewPage
             onPaperReady={handlePaperReady}
-            onBackToQuiz={() => setView('quiz')}
+            onBackToQuiz={() => {
+              setView('quiz')
+            }}
           />
         )}
 
         {view === 'expression' && (
           <div className="w-full">
-            <ExpressionDrill />
+            <ExpressionDrill
+              key={expressionSeed ? `expression-${expressionSeed.token}` : 'expression-default'}
+              seedTopic={expressionSeed?.topic ?? ''}
+              seedRoleKey={expressionSeed?.roleKey}
+              seedToken={expressionSeed?.token ?? 0}
+            />
           </div>
         )}
 

@@ -233,6 +233,7 @@ export interface ExpressionQuestion {
   label: string
   source: string
   section: string
+  topic_matched?: boolean
   role_key: string
   role_name: string
   reference_answer: string
@@ -403,6 +404,7 @@ export interface GradedQuestion {
 
 export interface WeakTopic {
   topic: string
+  module?: string
   diagnosis: string
   plain_summary?: string
   analogy?: string
@@ -464,10 +466,30 @@ export interface MasteredTopic {
   module?: string
 }
 
+export interface FocusStat {
+  total: number
+  correct: number
+  accuracy: number
+  streak: number
+}
+
+export interface FocusTypeGap {
+  type: QuestionType
+  label: string
+  total: number
+  correct: number
+  status: 'wrong' | 'unpracticed'
+}
+
 export interface FocusTopic extends MasteredTopic {
   reasons: string[]
   missing_types: QuestionType[]
   recommended_action: string
+  current_stats?: FocusStat
+  history_stats?: FocusStat
+  type_gaps?: FocusTypeGap[]
+  source_titles?: string[]
+  practice_plan?: string[]
 }
 
 export interface NextPaperSuggestion {
@@ -554,6 +576,11 @@ export interface ReviewSourceLineage {
   source_chunk_ids?: string[]
   paper_doc_ids?: string[]
   paper_doc_titles?: string[]
+}
+
+export interface ReviewAttemptContext {
+  paper_id: string
+  topics: string[]
 }
 
 export interface ReviewRecord {

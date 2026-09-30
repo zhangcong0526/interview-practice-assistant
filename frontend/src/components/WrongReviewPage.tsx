@@ -56,6 +56,9 @@ const REVIEW_TABS: { value: ReviewTab; label: string; icon: typeof CalendarClock
   { value: 'all', label: '全部错题', icon: BookOpenCheck },
 ]
 
+const moduleLabel = (module: string) =>
+  module === '综合测试能力' || !module ? '传统软件测试' : module
+
 function formatDate(timestamp: number): string {
   if (!timestamp) return '—'
   return new Date(timestamp * 1000).toLocaleDateString('zh-CN', {
@@ -176,9 +179,8 @@ export function WrongReviewPage({
   const moduleStats = progress?.module_stats ?? []
   const activeModule = selectedModule || moduleStats[0]?.module || ''
   const moduleTopics = (progress?.topics ?? []).filter(
-    (item) => (item.module || '综合测试能力') === activeModule,
+    (item) => moduleLabel(item.module || '综合测试能力') === activeModule,
   )
-
   return (
     <div className="space-y-5">
       <section className="tool-card">
@@ -209,16 +211,19 @@ export function WrongReviewPage({
         <div className="mt-4 flex flex-wrap gap-2">
           {REVIEW_TABS.map((item) => {
             const Icon = item.icon
+            const switchTab = () => {
+              setTab(item.value)
+            }
             return (
               <button
                 key={item.value}
                 type="button"
                 className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm transition ${
-                  tab === item.value
+                tab === item.value
                     ? 'border-emerald-500 bg-emerald-600 text-white'
                     : 'border-zinc-300 bg-white text-zinc-600 hover:border-emerald-300'
                 }`}
-                onClick={() => setTab(item.value)}
+                onClick={switchTab}
                 aria-pressed={tab === item.value}
               >
                 <Icon className="size-4" aria-hidden="true" />
@@ -227,6 +232,7 @@ export function WrongReviewPage({
             )
           })}
         </div>
+
       </section>
 
       {loading && (
@@ -370,7 +376,7 @@ export function WrongReviewPage({
                     onClick={() => setSelectedModule(module.module)}
                   >
                     <div className="flex items-center justify-between gap-2">
-                      <span className="truncate text-sm font-medium text-zinc-900">{module.module}</span>
+                      <span className="truncate text-sm font-medium text-zinc-900">{moduleLabel(module.module)}</span>
                       <span className="shrink-0 text-xs text-zinc-500">
                         {Math.round(module.accuracy * 100)}%
                       </span>
@@ -392,7 +398,7 @@ export function WrongReviewPage({
 
           {activeModule && (
             <div className="mt-5">
-              <p className="text-sm font-semibold text-zinc-900">{activeModule} 知识点</p>
+              <p className="text-sm font-semibold text-zinc-900">{moduleLabel(activeModule)}</p>
               {moduleTopics.length === 0 ? (
                 <p className="mt-2 text-sm text-zinc-500">这个板块还没有知识点样本。</p>
               ) : (

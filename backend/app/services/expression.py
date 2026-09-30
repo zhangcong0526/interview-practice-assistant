@@ -13,6 +13,7 @@ import os
 import random
 import re
 import time
+import threading
 import uuid
 from collections import Counter
 from datetime import date, datetime
@@ -34,6 +35,9 @@ KEYWORD_CACHE_DIR = settings.data_dir / "expression" / "keyword_cache"
 KEYWORD_CACHE_VERSION = "speaking-keywords-v2"
 SPEAKING_MATERIAL_CACHE_DIR = settings.data_dir / "expression" / "speaking_material_cache"
 SPEAKING_MATERIAL_CACHE_VERSION = "speaking-materials-v1"
+_SPEAKING_JOBS_LOCK = threading.Lock()
+_SPEAKING_JOBS: set[str] = set()
+_SPEAKING_WORK_LIMIT = threading.Semaphore(2)
 
 # 纯粹的语气词，出现即扣分。
 FILLER_WORDS = ("嗯", "呃", "唉", "哦", "啊", "额")
@@ -238,10 +242,39 @@ def _valid_speaking_material(
     return keywords[:8], points[:5], script
 
 
+def _prefetch_speaking_materials(
+    question: str,
+    answer: str,
+    fallback_keywords: list[str],
+) -> None:
+    """后台补齐表达素材，避免首次取题被慢模型同步阻塞。"""
+    digest = hashlib.sha1(f"material:{question}\n{answer}".encode("utf-8")).hexdigest()
+    with _SPEAKING_JOBS_LOCK:
+        if digest in _SPEAKING_JOBS:
+            return
+        _SPEAKING_JOBS.add(digest)
+
+    def worker() -> None:
+        try:
+            with _SPEAKING_WORK_LIMIT:
+                _speaking_materials(question, answer, fallback_keywords)
+        finally:
+            with _SPEAKING_JOBS_LOCK:
+                _SPEAKING_JOBS.discard(digest)
+
+    threading.Thread(
+        target=worker,
+        name=f"speaking-material-{digest[:10]}",
+        daemon=True,
+    ).start()
+
+
 def _speaking_materials(
     question: str,
     answer: str,
     fallback_keywords: list[str],
+    *,
+    allow_llm: bool = True,
 ) -> tuple[list[str], list[str], str]:
     """一次生成并缓存表达素材，避免同一题反复调用 LLM。"""
     if not answer.strip():
@@ -263,6 +296,15 @@ def _speaking_materials(
         script = str(cached.get("reference_script") or "").strip()
         if keywords and cached_points and script:
             return keywords, cached_points, script
+
+    fallback = (
+        _valid_speaking_keywords(fallback_keywords, question, answer) or fallback_keywords,
+        _fallback_key_points(answer),
+        _fallback_reference_script(answer),
+    )
+    if not allow_llm:
+        _prefetch_speaking_materials(question, answer, fallback_keywords)
+        return fallback
 
     try:
         raw = llm_service.chat_json(
@@ -307,7 +349,33 @@ def _drill_display_question(item: dict) -> str:
     return question or item["question"]
 
 
-def drill_question(role_key: str) -> dict:
+def _topic_terms(topic_hint: str) -> set[str]:
+    normalized = _keyword_norm(topic_hint)
+    terms = {normalized} if normalized else set()
+    parts = [part for part in re.split(r"[\s/、，,;；|+]+", topic_hint) if part]
+    terms.update(part for part in (_keyword_norm(part) for part in parts) if len(part) >= 2)
+    return terms
+
+
+def _topic_matches(item: dict, terms: set[str]) -> bool:
+    if not terms:
+        return False
+    haystack = _keyword_norm(
+        " ".join(
+            [
+                str(item.get("question") or ""),
+                str(item.get("section") or ""),
+                str(item.get("intent") or ""),
+                str(item.get("source") or ""),
+                " ".join(item.get("keywords") or []),
+                str(item.get("reference_answer") or "")[:1200],
+            ]
+        )
+    )
+    return any(term in haystack for term in terms)
+
+
+def drill_question(role_key: str, topic_hint: str = "") -> dict:
     """从该岗位的真题库里出一道表达练习题，避开最近练过的题。"""
     role = roles_service.get_role(role_key)
     if not role:
@@ -327,6 +395,13 @@ def drill_question(role_key: str) -> dict:
         if passed_blind:
             recent.add(str(session.get("question_label") or ""))
     pool = [item for item in questions if item.get("label") not in recent] or questions
+    topic_terms = _topic_terms(topic_hint)
+    topic_matched = False
+    if topic_terms:
+        topic_pool = [item for item in pool if _topic_matches(item, topic_terms)]
+        if topic_pool:
+            pool = topic_pool
+            topic_matched = True
     item = random.choice(pool)
     # 真题库原文里偶尔夹着文档批注，如「（answers.md第46题已有）」，练习题面要干净。
     question = _drill_display_question(item)
@@ -335,12 +410,14 @@ def drill_question(role_key: str) -> dict:
         display_question,
         item.get("reference_answer", ""),
         item.get("keywords", []),
+        allow_llm=False,
     )
     return {
         "question": display_question,
         "label": item.get("label", ""),
         "source": item.get("source", ""),
         "section": item.get("section", ""),
+        "topic_matched": topic_matched,
         "reference_answer": item.get("reference_answer", ""),
         "keywords": keywords,
         "standard_key_points": standard_key_points,

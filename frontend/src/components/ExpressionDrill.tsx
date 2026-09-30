@@ -163,16 +163,23 @@ function ExpressionComparisonCard({ comparison }: { comparison?: ExpressionSessi
   )
 }
 
-export function ExpressionDrill() {
+interface ExpressionDrillProps {
+  seedTopic?: string
+  seedRoleKey?: string
+  seedToken?: number
+}
+
+export function ExpressionDrill({ seedTopic = '', seedRoleKey, seedToken = 0 }: ExpressionDrillProps) {
   const [roles, setRoles] = useState<InterviewRoleOption[]>([])
   const [roleKey, setRoleKey] = useState(
-    () => window.localStorage.getItem('opc-expression-role') ?? 'ai_qa',
+    () => seedRoleKey ?? window.localStorage.getItem('opc-expression-role') ?? 'ai_qa',
   )
   const [hintMode, setHintMode] = useState<ExpressionPracticeMode>(() => {
     const saved = window.localStorage.getItem('opc-expression-hint-mode')
     return saved === 'read' || saved === 'keywords' || saved === 'blind' ? saved : 'read'
   })
   const [question, setQuestion] = useState<ExpressionQuestion | null>(null)
+  const [topicHint, setTopicHint] = useState(seedTopic)
   const [transcript, setTranscript] = useState('')
   const [elapsed, setElapsed] = useState(0)
   const [session, setSession] = useState<ExpressionSession | null>(null)
@@ -182,6 +189,7 @@ export function ExpressionDrill() {
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const timerRef = useRef<number | null>(null)
+  const seededTokenRef = useRef(seedToken)
   const startedAtRef = useRef(0)
   const streamRef = useRef<MediaStream | null>(null)
   const recorderRef = useRef<MediaRecorder | null>(null)
@@ -226,7 +234,7 @@ export function ExpressionDrill() {
   }, [])
 
   const loadQuestion = useCallback(
-    async (key: string) => {
+    async (key: string, hint = '') => {
       answerRoundRef.current += 1
       cancelActiveRecording()
       setBusy('question')
@@ -236,7 +244,8 @@ export function ExpressionDrill() {
       setPreviousSessionId('')
       setRetryMissedPoints([])
       try {
-        setQuestion(await getExpressionQuestion(key))
+        setTopicHint(hint)
+        setQuestion(await getExpressionQuestion(key, hint))
       } catch (loadError) {
         setError(loadError instanceof Error ? loadError.message : '取题失败。')
       } finally {
@@ -255,12 +264,21 @@ export function ExpressionDrill() {
       if (initial !== roleKey) {
         setRoleKey(initial)
       }
-      void loadQuestion(initial)
+      void loadQuestion(initial, seedTopic)
     })
     void refreshProgress()
     // 只在首次挂载时加载岗位和题目；切换岗位由 chooseRole 显式触发，避免重复取题。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    if (seedToken > 0 && seedToken !== seededTokenRef.current && seedTopic) {
+      seededTokenRef.current = seedToken
+      void loadQuestion(roleKey, seedTopic)
+    }
+    // seedTopic/roleKey 只是为本次新种子服务，避免旧话题在切换岗位后反复触发。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seedToken])
 
   const chooseRole = (key: string) => {
     if (key === roleKey && (busy === 'record' || busy === 'transcribing')) return
@@ -582,6 +600,22 @@ export function ExpressionDrill() {
             换一题
           </button>
         </div>
+
+        {topicHint && (
+          <p
+            className={`mt-2 rounded-lg border px-3 py-2 text-xs leading-5 ${
+              question?.topic_matched === false
+                ? 'border-amber-200 bg-amber-50 text-amber-800'
+                : 'border-sky-100 bg-sky-50 text-sky-800'
+            }`}
+          >
+            {busy === 'question'
+              ? `正在根据薄弱知识点「${topicHint}」选题。`
+              : question?.topic_matched === false
+                ? `真题库里暂时没有匹配「${topicHint}」的题，已随机选这题。练习方向仍按薄弱知识点定位；导入相关真题库后会优先命中。`
+                : `已定位薄弱知识点：${topicHint}。本题来自相关真题。`}
+          </p>
+        )}
 
         <div className="mt-4 grid grid-cols-3 gap-2">
           {HINT_MODES.map((mode) => {

@@ -17,7 +17,7 @@ MAX_CLIP_BYTES = 20 * 1024 * 1024
 @router.post("/question")
 async def next_question(req: ExpressionQuestionRequest):
     try:
-        return await asyncio.to_thread(expression_service.drill_question, req.role_key)
+        return await asyncio.to_thread(expression_service.drill_question, req.role_key, req.topic)
     except expression_service.ExpressionError as exc:
         raise HTTPException(422, str(exc))
 

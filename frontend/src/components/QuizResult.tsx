@@ -1,12 +1,12 @@
 import {
   AlertTriangle,
   ArrowRight,
-  BookOpenCheck,
   BookMarked,
   CheckCircle2,
   GitBranch,
   Lightbulb,
   Loader2,
+  Mic,
   RotateCcw,
   Target,
   XCircle,
@@ -25,7 +25,7 @@ interface QuizResultProps {
   cumulativeMistakeCount: number
   onRetryMistakes: (paper: QuizPaper) => void
   onBackToSetup: () => void
-  onOpenReview: () => void
+  onOpenExpression: (topic: string, module?: string) => void
 }
 
 const LEVEL_LABEL: Record<MasteryLevel, string> = {
@@ -48,7 +48,7 @@ export function QuizResult({
   cumulativeMistakeCount,
   onRetryMistakes,
   onBackToSetup,
-  onOpenReview,
+  onOpenExpression,
 }: QuizResultProps) {
   const [busy, setBusy] = useState(false)
   const [topicBusy, setTopicBusy] = useState('')
@@ -254,36 +254,86 @@ export function QuizResult({
                     <li key={topic.topic} className="rounded-lg bg-white px-3 py-2 ring-1 ring-zinc-200">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <span className="text-xs font-semibold text-zinc-800">{topic.topic}</span>
-                        <span className="text-xs text-zinc-500">
-                          {topic.correct}/{topic.total} · 正确率 {Math.round(topic.accuracy * 100)}%
-                        </span>
+                        <span className="text-xs text-zinc-500">{topic.module}</span>
                       </div>
-                      <p className="mt-1 text-xs leading-5 text-zinc-600">
-                        {topic.reasons.join('；')}
-                      </p>
-                      <p className="mt-1 text-xs leading-5 text-emerald-800">
-                        {topic.recommended_action}
-                      </p>
-                      <button
-                        type="button"
-                        className="mt-2 inline-flex items-center gap-1 rounded-md bg-emerald-600 px-2 py-1 text-[11px] font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-60"
-                        onClick={() => void handleTopicRedo(topic.topic)}
-                        disabled={Boolean(topicBusy)}
-                      >
-                        {topicBusy === topic.topic ? (
-                          <Loader2 className="size-3 animate-spin" aria-hidden="true" />
-                        ) : (
-                          <RotateCcw className="size-3" aria-hidden="true" />
+                      <div className="mt-1.5 flex flex-wrap gap-1.5">
+                        <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[11px] text-zinc-600">
+                          历史 {topic.history_stats?.correct ?? topic.correct}/{topic.history_stats?.total ?? topic.total}
+                          {' · '}
+                          正确率 {Math.round((topic.history_stats?.accuracy ?? topic.accuracy) * 100)}%
+                        </span>
+                        {topic.current_stats && (
+                          <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[11px] text-amber-700">
+                            本次 {topic.current_stats.correct}/{topic.current_stats.total}
+                          </span>
                         )}
-                        去重做
-                      </button>
+                        {(topic.type_gaps ?? []).slice(0, 2).map((gap) => (
+                          <span
+                            key={gap.type}
+                            className={`rounded px-1.5 py-0.5 text-[11px] ${
+                              gap.status === 'unpracticed'
+                                ? 'bg-sky-50 text-sky-700'
+                                : 'bg-red-50 text-red-700'
+                            }`}
+                          >
+                            {gap.label}
+                            {gap.status === 'unpracticed' ? '未练' : ` ${gap.correct}/${gap.total}`}
+                          </span>
+                        ))}
+                      </div>
+                      <p className="mt-1.5 text-xs leading-5 text-zinc-600">
+                        为什么优先：{topic.reasons.join('；')}
+                      </p>
+                      {(topic.source_titles ?? []).length > 0 && (
+                        <p className="mt-1 text-xs leading-5 text-zinc-500">
+                          补读来源：{(topic.source_titles ?? []).join('、')}
+                        </p>
+                      )}
+                      {topic.practice_plan && topic.practice_plan.length > 0 ? (
+                        <ol className="mt-1.5 space-y-1 text-xs leading-5 text-emerald-800">
+                          {topic.practice_plan.map((step, index) => (
+                            <li key={`${topic.topic}-step-${index}`} className="flex gap-1.5">
+                              <span className="shrink-0 font-semibold">{index + 1}.</span>
+                              <span>{step}</span>
+                            </li>
+                          ))}
+                        </ol>
+                      ) : (
+                        <p className="mt-1 text-xs leading-5 text-emerald-800">
+                          {topic.recommended_action}
+                        </p>
+                      )}
+                      <div className="mt-2.5 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-2 py-1 text-[11px] font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-60"
+                          onClick={() => void handleTopicRedo(topic.topic)}
+                          disabled={Boolean(topicBusy)}
+                        >
+                          {topicBusy === topic.topic ? (
+                            <Loader2 className="size-3 animate-spin" aria-hidden="true" />
+                          ) : (
+                            <RotateCcw className="size-3" aria-hidden="true" />
+                          )}
+                          去重做
+                        </button>
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 rounded-md bg-sky-600 px-2 py-1 text-[11px] font-semibold text-white transition hover:bg-sky-700 disabled:opacity-60"
+                          onClick={() => onOpenExpression(topic.topic, topic.module)}
+                          disabled={Boolean(topicBusy)}
+                        >
+                          <Mic className="size-3" aria-hidden="true" />
+                          去说一说
+                        </button>
+                      </div>
                     </li>
                   ))}
                 </ul>
               ) : (
                 <p className="mt-1 text-xs leading-5 text-zinc-500">
                   {guide.focus_scope_note
-                    ? "本卷未发现新的薄弱知识点，建议按下一套建议做间隔复习。"
+                    ? "这份试卷没有发现新的薄弱知识点。不用做专项补救，过一段时间再做一套同类题，确认不是靠短期记忆答对的。"
                     : "当前知识点掌握稳定，可以做一套混合卷保持手感。"}
                 </p>
               )}
@@ -348,14 +398,6 @@ export function QuizResult({
         </div>
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-emerald-50 px-3 py-2.5 text-xs text-emerald-800">
           <span>本次错题与薄弱知识点已同步到错题复盘。</span>
-          <button
-            type="button"
-            className="inline-flex items-center gap-1 font-semibold text-emerald-700 transition hover:text-emerald-800"
-            onClick={onOpenReview}
-          >
-            <BookOpenCheck className="size-3.5" aria-hidden="true" />
-            查看复盘
-          </button>
         </div>
         {error && <p className="mt-3 text-sm leading-5 text-red-600">{error}</p>}
       </section>
@@ -366,7 +408,17 @@ export function QuizResult({
           <ul className="mt-4 space-y-4">
             {review.weak_topics.map((topic) => (
               <li key={topic.topic} className="border-t border-zinc-100 pt-4 first:border-0 first:pt-0">
-                <p className="text-sm font-semibold text-zinc-900">{topic.topic}</p>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-semibold text-zinc-900">{topic.topic}</p>
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 rounded-md bg-sky-600 px-2 py-1 text-[11px] font-semibold text-white transition hover:bg-sky-700"
+                    onClick={() => onOpenExpression(topic.topic, topic.module)}
+                  >
+                    <Mic className="size-3" aria-hidden="true" />
+                    去说一说
+                  </button>
+                </div>
                 {topic.diagnosis && (
                   <div className="mt-2.5 rounded-lg border border-amber-200 bg-amber-50 p-3">
                     <p className="text-xs font-semibold text-amber-800">为什么做错</p>

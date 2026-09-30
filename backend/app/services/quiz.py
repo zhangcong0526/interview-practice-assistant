@@ -92,13 +92,27 @@ def _resolve_review_channel() -> tuple[str | None, str | None]:
             return "ark", settings.ark_model
         return "minimax", None
     return None, settings.review_model or None
+
+
+def _resolve_review_fallback_channel(primary_provider: str | None) -> tuple[str | None, str | None]:
+    """主复习通道慢时切到另一个已配置厂商，避免同一模型反复超时。"""
+    primary = primary_provider or settings.llm_provider
+    if settings.deepseek_api_key and primary != "deepseek":
+        return "deepseek", "deepseek-chat"
+    if settings.ark_api_key and settings.ark_model and primary != "ark":
+        return "ark", settings.ark_model
+    if settings.minimax_api_key and settings.minimax_model and primary != "minimax":
+        return "minimax", None
+    return primary, None
+
+
 REVIEW_BATCH_SIZE = 2
 REVIEW_MAX_CONCURRENCY = 3
 REVIEW_LLM_ITEM_LIMIT = 8
-REVIEW_TIMEOUT_SECONDS = 30.0
+REVIEW_TIMEOUT_SECONDS = 35.0
 REVIEW_FALLBACK_BATCH_SIZE = 1
 REVIEW_FALLBACK_CONCURRENCY = 3
-REVIEW_FALLBACK_TIMEOUT_SECONDS = 15.0
+REVIEW_FALLBACK_TIMEOUT_SECONDS = 20.0
 MASTERY_LEVEL_ORDER = {"beginner": 0, "developing": 1, "proficient": 2, "mastered": 3}
 # 连续两次答对即视为该知识点已回稳，可以移出错题本。
 MISTAKE_CLEAR_STREAK = 2
@@ -224,10 +238,26 @@ def _topic_module(topic: str, catalog: dict) -> str:
     category_key = _normalise_topic_key(raw_category)
     source = f"{category_key} {key}"
 
+    ai_test_terms = (
+        "aitest", "ai测试", "ai代码审计", "ai缺陷", "ai辅助用例", "ai用例",
+        "ai提效", "ai落地", "ai替代", "幻觉测试", "幻觉", "评测", "评估",
+        "agent应用测试", "智能体测试", "prompt注入", "黄金标准集",
+    )
+    ai_app_terms = (
+        "ai应用", "大模型应用", "llm应用", "agent应用", "agent开发",
+        "智能体应用", "智能体开发", "prompt工程", "结构化输出",
+        "withstructuredoutput", "astream", "流式输出", "toolcalls",
+        "functioncalling", "mcp", "上下文窗口", "contextwindow", "token",
+        "rag", "embedding", "向量", "分块", "chunking", "rerank", "重排",
+        "top-k", "topk", "ann", "近似最近邻", "idf", "tf-idf", "tfidf",
+        "知识库", "模型选型", "temperature", "listindex", "余弦相似度",
+        "cosinesimilarity", "索引",
+    )
     ai_terms = (
         "ai", "llm", "大模型", "rag", "agent", "智能体", "prompt", "embedding",
         "向量", "transformer", "token", "hallucination", "幻觉", "mcp",
-        "functioncalling", "微调",
+        "functioncalling", "微调", "sft", "lora", "deepagent", "langchain",
+        "langgraph", "graphrag", "rerank", "chunking", "结构化输出",
     )
     hardware_terms = (
         "can", "485", "bms", "电机", "驱动器", "雷达", "imu", "编码器", "执行器",
@@ -245,19 +275,35 @@ def _topic_module(topic: str, catalog: dict) -> str:
         "测试流程", "测试管理", "专项", "数据库", "接口", "自动化", "性能", "web", "app",
         "小程序", "linux", "python", "软件测试",
     )
+    if any(term in key for term in ai_test_terms):
+        return "AI 测试"
+    if any(term in key for term in ai_app_terms):
+        return "AI 应用开发"
+    if any(term in source for term in ai_test_terms):
+        return "AI 测试"
+    if any(term in source for term in ai_app_terms):
+        return "AI 应用开发"
     if any(term in key for term in ai_terms):
-        return "AI大模型与Agent测试"
+        return "AI 应用开发"
+    if any(
+        term in category_key
+        for term in (
+            "llm", "大模型", "rag", "agent", "向量", "embedding", "微调",
+            "多模态", "结构化输出", "提示词", "部署方案", "相似度", "缓存",
+        )
+    ):
+        return "AI 应用开发"
     if any(term in source for term in ai_terms):
-        return "AI大模型与Agent测试"
+        return "AI 应用开发"
     if any(term in source for term in hardware_terms):
         return "机器人与智能硬件测试"
     if any(term in source for term in communication_terms):
-        return "通信协议与物联网"
+        return "机器人与智能硬件测试"
     if any(term in source for term in management_terms):
-        return "职业素养与团队管理"
+        return "传统软件测试"
     if any(term in source for term in software_terms):
         return "传统软件测试"
-    return "综合测试能力"
+    return "传统软件测试"
 
 
 def _empty_type_stat() -> dict:
@@ -1792,6 +1838,110 @@ def _graded_type_stats(graded: list[dict]) -> list[dict]:
     ]
 
 
+def _focus_stat(stat: dict) -> dict:
+    total = max(0, int(stat.get("total", 0) or 0))
+    correct = max(0, int(stat.get("correct", 0) or 0))
+    return {
+        "total": total,
+        "correct": correct,
+        "accuracy": _accuracy(correct, total),
+        "streak": max(0, int(stat.get("streak", 0) or 0)),
+    }
+
+
+def _focus_source_titles(
+    topic: str,
+    graded: list[dict],
+    mistakes: list[dict],
+    review_sources: dict[str, list[dict]] | None = None,
+) -> list[str]:
+    titles: list[str] = []
+
+    def add_title(value: object) -> None:
+        title = str(value or "").strip()
+        if title and title not in titles:
+            titles.append(title)
+
+    for item in graded:
+        if str(item.get("topic") or "").strip() == topic:
+            add_title(item.get("source_title"))
+
+    for ref in (review_sources or {}).get(topic) or []:
+        if isinstance(ref, dict):
+            add_title(ref.get("title"))
+
+    for mistake in mistakes:
+        if str(mistake.get("topic") or "").strip() != topic:
+            continue
+        add_title(mistake.get("source_title"))
+        for doc in mistake.get("source_docs") or []:
+            if isinstance(doc, dict):
+                add_title(doc.get("title"))
+
+    return titles[:3]
+
+
+def _decorate_focus_entry(
+    entry: dict,
+    graded: list[dict],
+    mistakes: list[dict],
+    review_sources: dict[str, list[dict]] | None = None,
+    history_stat: dict | None = None,
+) -> dict:
+    topic = str(entry.get("topic") or "").strip()
+    current_items = [item for item in graded if str(item.get("topic") or "").strip() == topic]
+    current_stat = {
+        "total": len(current_items),
+        "correct": sum(1 for item in current_items if item.get("is_correct")),
+        "streak": 0,
+    }
+    if current_items:
+        entry["current_stats"] = _focus_stat(current_stat)
+    if history_stat:
+        entry["history_stats"] = _focus_stat(history_stat)
+
+    type_gaps: list[dict] = []
+    for qtype in VALID_TYPES:
+        item = (entry.get("by_type") or {}).get(qtype) or {}
+        total = max(0, int(item.get("total", 0) or 0))
+        correct = max(0, int(item.get("correct", 0) or 0))
+        if not total:
+            status = "unpracticed"
+        elif correct == 0:
+            status = "wrong"
+        else:
+            continue
+        type_gaps.append(
+            {
+                "type": qtype,
+                "label": TYPE_LABELS[qtype],
+                "total": total,
+                "correct": correct,
+                "status": status,
+            }
+        )
+    entry["type_gaps"] = type_gaps[:2]
+
+    source_titles = _focus_source_titles(topic, graded, mistakes, review_sources)
+    entry["source_titles"] = source_titles
+
+    plan: list[str] = []
+    if source_titles:
+        plan.append("先回读《" + "》《".join(source_titles) + "》里的相关段落。")
+    else:
+        plan.append("先回读本知识点对应的原始资料；老数据没有来源时，先用下方解析看懂答案差异。")
+    plan.append("再看下方“错因分析与快速理解”，弄清正确答案为什么成立、你的答案缺了什么。")
+    for gap in entry["type_gaps"]:
+        if gap["status"] == "unpracticed":
+            plan.append(f"补 1~2 道{gap['label']}，检查这个概念换题型后是否还讲得清。")
+        else:
+            plan.append(f"重做{gap['label']}，当前是 {gap['correct']}/{gap['total']}，先讲清再做题。")
+    plan.append("答对后换一个业务场景验证；隔天再用未通过的题型确认不是短期记忆。")
+    entry["practice_plan"] = plan[:5]
+    entry["recommended_action"] = entry["practice_plan"][0]
+    return entry
+
+
 def _current_focus_entry(topic: str, items: list[dict], catalog: dict | None = None) -> dict:
     """错题变形卷提交后，只按本卷表现生成重点复习项。"""
     module = _topic_module(topic, catalog or _topic_catalog())
@@ -2036,7 +2186,11 @@ def _next_paper_suggestion(focus_topics: list[dict], type_stats: list[dict]) -> 
     }
 
 
-def _build_learning_guide(graded: list[dict] | None = None, paper: dict | None = None) -> dict:
+def _build_learning_guide(
+    graded: list[dict] | None = None,
+    paper: dict | None = None,
+    review_sources: dict[str, list[dict]] | None = None,
+) -> dict:
     graded = graded or []
     generation_context = paper.get("generation_context") if paper else None
     is_mistake_redo = (
@@ -2062,6 +2216,16 @@ def _build_learning_guide(graded: list[dict] | None = None, paper: dict | None =
             _current_focus_entry(topic, items_by_topic[topic], catalog)
             for topic in current_topics
             if topic in wrong_topics and topic in items_by_topic
+        ]
+        focus_topics = [
+            _decorate_focus_entry(
+                entry,
+                graded,
+                mistakes,
+                review_sources,
+                mastery.get(entry["topic"]),
+            )
+            for entry in focus_topics
         ]
         focus_topics.sort(key=lambda item: (item["accuracy"], -item["total"]))
         type_stats = _graded_type_stats(graded)
@@ -2135,7 +2299,15 @@ def _build_learning_guide(graded: list[dict] | None = None, paper: dict | None =
             continue
         entry = _focus_entry(topic, stat, wrong_topics, active_mistake_topics, catalog)
         if entry:
-            focus_topics.append(entry)
+            focus_topics.append(
+                _decorate_focus_entry(
+                    entry,
+                    graded,
+                    mistakes,
+                    review_sources,
+                    stat,
+                )
+            )
     focus_topics.sort(key=lambda item: (item["topic"] not in wrong_topics, item["accuracy"], -item["total"]))
 
     type_stats = _aggregate_type_stats(mastery)
@@ -2430,6 +2602,9 @@ def _generate_review(
     batches = _build_review_batches(graded, topic_stats, review_sources, history)
     overall_context = _build_review_context(graded)
     review_provider, review_model = _resolve_review_channel()
+    review_fallback_provider, review_fallback_model = _resolve_review_fallback_channel(
+        review_provider
+    )
 
     def call(batch: dict) -> dict:
         return llm_service.chat_json(
@@ -2452,29 +2627,19 @@ def _generate_review(
         try:
             return call(batches[0])
         except llm_service.LlmError as exc:
-            fallback_batches = _split_review_batches(batches[0])
-            if len(fallback_batches) <= 1:
-                local = _build_local_review(
-                    graded, score, accuracy, review_sources, topic_stats
-                )
-                local["review_error"] = f"模型调用超时，已生成基础复习建议：{exc}"
-                return local
             try:
                 fallback_results = _run_review_calls(
-                    fallback_batches,
+                    [batches[0]],
                     score,
                     accuracy,
                     overall_context,
-                    max_tokens=1200,
-                    timeout=REVIEW_FALLBACK_TIMEOUT_SECONDS,
-                    concurrency=REVIEW_FALLBACK_CONCURRENCY,
+                    max_tokens=1600,
+                    timeout=REVIEW_TIMEOUT_SECONDS,
+                    concurrency=1,
+                    provider=review_fallback_provider,
+                    model=review_fallback_model,
                 )
-                merged = _merge_reviews(fallback_results)
-                merged["review_error"] = f"完整复习建议超时，已保留拆分后的部分建议：{exc}"
-                local = _build_local_review(
-                    graded, score, accuracy, review_sources, topic_stats
-                )
-                return _merge_local_coverage(merged, local)
+                return fallback_results[0]
             except llm_service.LlmError:
                 local = _build_local_review(
                     graded, score, accuracy, review_sources, topic_stats
@@ -2510,6 +2675,8 @@ def _generate_review(
                 max_tokens=1200,
                 timeout=REVIEW_FALLBACK_TIMEOUT_SECONDS,
                 concurrency=REVIEW_FALLBACK_CONCURRENCY,
+                provider=review_fallback_provider,
+                model=review_fallback_model,
             )
             results.extend(fallback_results)
             errors = []
@@ -2625,10 +2792,16 @@ def _run_review_calls(
     max_tokens: int,
     timeout: float,
     concurrency: int,
+    provider: str | None = None,
+    model: str | None = None,
 ) -> list[dict]:
     """并发执行复习批次；任一批次失败时整体抛错，由调用方决定是否保留部分结果。"""
     results: list[dict] = []
-    review_provider, review_model = _resolve_review_channel()
+    review_provider, review_model = (
+        (provider, model)
+        if provider is not None
+        else _resolve_review_channel()
+    )
     with ThreadPoolExecutor(max_workers=max(1, concurrency)) as executor:
         futures = {
             executor.submit(
@@ -2722,7 +2895,7 @@ def grade(paper_id: str, answers: dict[str, list[str]]) -> dict:
         review["review_error"] = f"模型调用超时，已生成基础复习建议：{exc}"
 
     review = _normalise_review(review, accuracy, review_sources)
-    review["learning_guide"] = _build_learning_guide(graded, paper)
+    review["learning_guide"] = _build_learning_guide(graded, paper, review_sources)
 
     attempt_id = uuid.uuid4().hex
     attempt = {
@@ -2776,6 +2949,7 @@ def _normalise_review(
         weak_topics.append(
             {
                 "topic": topic,
+                "module": _topic_module(topic, _topic_catalog()),
                 "diagnosis": str(item.get("diagnosis") or "").strip(),
                 "plain_summary": str(item.get("plain_summary") or "").strip(),
                 "analogy": str(item.get("analogy") or "").strip(),

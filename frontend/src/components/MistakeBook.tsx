@@ -1,10 +1,13 @@
-import { ArrowRight, BookMarked } from 'lucide-react'
-import type { QuizProgress, TopicProgress } from '../types'
+import { ArrowRight, BookMarked, Loader2, RotateCcw } from 'lucide-react'
+import { useState } from 'react'
+import { generateQuizPaper } from '../api'
+import type { QuizPaper, QuizProgress, TopicProgress } from '../types'
 
 interface MistakeBookProps {
   progress: QuizProgress | null
   reviewDueCount: number
   onOpenReview: () => void
+  onPaperReady: (paper: QuizPaper) => void
 }
 
 const TYPE_LABEL: Record<string, string> = {
@@ -12,6 +15,9 @@ const TYPE_LABEL: Record<string, string> = {
   multiple: '多选题',
   judge: '判断题',
 }
+
+const moduleLabel = (module: string) =>
+  module === '综合测试能力' || !module ? '传统软件测试' : module
 
 function getTopicHint(topic: TopicProgress): string {
   if (topic.total < 4) {
@@ -37,12 +43,41 @@ export function MistakeBook({
   progress,
   reviewDueCount,
   onOpenReview,
+  onPaperReady,
 }: MistakeBookProps) {
+  const [practiceBusy, setPracticeBusy] = useState('')
+  const [practiceError, setPracticeError] = useState('')
   const topics = (progress?.topics ?? [])
     .slice()
     .sort((left, right) => left.accuracy - right.accuracy)
     .slice(0, 5)
   const hasData = Boolean(progress && progress.answered_total > 0)
+
+  const moduleTopics = (module: string): TopicProgress[] =>
+    (progress?.topics ?? []).filter(
+      (item) => moduleLabel(item.module || '综合测试能力') === module,
+    )
+
+  const handlePracticeTopics = async (label: string, keywords: string[]) => {
+    if (practiceBusy || keywords.length === 0) return
+    setPracticeBusy(label)
+    setPracticeError('')
+    try {
+      const paper = await generateQuizPaper({
+        keywords,
+        single: 4,
+        multiple: 3,
+        judge: 3,
+        difficulty: 'mixed',
+        focus_weak: true,
+      })
+      onPaperReady(paper)
+    } catch (error) {
+      setPracticeError(error instanceof Error ? error.message : '巩固组卷失败。')
+    } finally {
+      setPracticeBusy('')
+    }
+  }
 
   return (
     <section className="tool-card">
@@ -79,41 +114,62 @@ export function MistakeBook({
         </button>
       )}
 
+      {practiceError && (
+        <p className="mt-2 text-xs leading-5 text-red-600">{practiceError}</p>
+      )}
+
       {progress?.module_stats && progress.module_stats.length > 0 && (
         <div className="mt-4">
           <p className="mb-2 text-xs font-semibold text-zinc-700">板块掌握度</p>
           <ul className="space-y-2">
-            {progress.module_stats.slice(0, 3).map((module) => (
+            {progress.module_stats.slice(0, 5).map((module) => (
               <li key={module.module}>
                 <div className="flex items-center justify-between gap-2 text-xs">
-                  <span className="min-w-0 truncate text-zinc-700">{module.module}</span>
+                  <span className="min-w-0 truncate text-zinc-700">{moduleLabel(module.module)}</span>
                   <span className="shrink-0 text-zinc-500">
                     {Math.round(module.accuracy * 100)}%
                   </span>
                 </div>
-                <div className="mt-1 h-1.5 overflow-hidden rounded-lg bg-zinc-200">
-                  <div
-                    className={`h-full rounded-lg ${
-                      module.accuracy >= 0.85
-                        ? 'bg-emerald-600'
-                        : module.accuracy >= 0.6
-                          ? 'bg-amber-500'
-                          : 'bg-red-500'
-                    }`}
-                    style={{ width: `${Math.max(4, module.accuracy * 100)}%` }}
-                  />
+                <div className="mt-1 flex items-center gap-2">
+                  <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-lg bg-zinc-200">
+                    <div
+                      className={`h-full rounded-lg ${
+                        module.accuracy >= 0.85
+                          ? 'bg-emerald-600'
+                          : module.accuracy >= 0.6
+                            ? 'bg-amber-500'
+                            : 'bg-red-500'
+                      }`}
+                      style={{ width: `${Math.max(4, module.accuracy * 100)}%` }}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    className="inline-flex shrink-0 items-center gap-1 rounded-md bg-zinc-100 px-1.5 py-0.5 text-[11px] font-semibold text-emerald-700 transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:text-zinc-400"
+                    onClick={() =>
+                      void handlePracticeTopics(
+                        `module:${module.module}`,
+                        moduleTopics(module.module)
+                          .slice(0, 6)
+                          .map((topic) => topic.topic),
+                      )
+                    }
+                    disabled={Boolean(practiceBusy) || moduleTopics(module.module).length === 0}
+                  >
+                    {practiceBusy === `module:${module.module}` ? (
+                      <Loader2 className="size-3 animate-spin" aria-hidden="true" />
+                    ) : (
+                      <RotateCcw className="size-3" aria-hidden="true" />
+                    )}
+                    巩固 10 题
+                  </button>
                 </div>
               </li>
             ))}
           </ul>
-          <button
-            type="button"
-            className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-emerald-700 transition hover:text-emerald-800"
-            onClick={onOpenReview}
-          >
-            巩固薄弱板块
-            <ArrowRight className="size-3" aria-hidden="true" />
-          </button>
+          <p className="mt-1.5 text-[11px] leading-4 text-zinc-500">
+            点击板块名旁的按钮，直接生成 10 题巩固卷。
+          </p>
         </div>
       )}
 
@@ -146,11 +202,16 @@ export function MistakeBook({
                 </p>
                 <button
                   type="button"
-                  className="mt-1.5 inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 transition hover:text-emerald-800"
-                  onClick={onOpenReview}
+                  className="mt-1.5 inline-flex items-center gap-1 rounded-md bg-emerald-600 px-1.5 py-0.5 text-[11px] font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-60"
+                  onClick={() => void handlePracticeTopics(`topic:${topic.topic}`, [topic.topic])}
+                  disabled={Boolean(practiceBusy)}
                 >
-                  再练这个知识点
-                  <ArrowRight className="size-3" aria-hidden="true" />
+                  {practiceBusy === `topic:${topic.topic}` ? (
+                    <Loader2 className="size-3 animate-spin" aria-hidden="true" />
+                  ) : (
+                    <RotateCcw className="size-3" aria-hidden="true" />
+                  )}
+                  再练 5 题
                 </button>
               </li>
             ))}

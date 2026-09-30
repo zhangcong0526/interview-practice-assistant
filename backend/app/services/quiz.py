@@ -1884,7 +1884,7 @@ def _focus_source_titles(
 def _filter_focus_by_current_topics(
     focus_topics: list[dict],
     current_topics: list[str],
-    limit: int = 5,
+    limit: int = 3,
 ) -> list[dict]:
     if not focus_topics:
         return focus_topics

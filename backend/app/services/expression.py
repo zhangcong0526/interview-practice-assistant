@@ -372,7 +372,37 @@ def _topic_matches(item: dict, terms: set[str]) -> bool:
             ]
         )
     )
+    strong_terms = [term for term in terms if len(term) >= 3]
+    if strong_terms and any(term in haystack for term in strong_terms):
+        return True
+    full = _keyword_norm(" ".join(sorted(terms)))
+    return bool(full and full in haystack)
     return any(term in haystack for term in terms)
+
+
+def _topic_match_score(item: dict, terms: set[str]) -> int:
+    """为命中真题打分，让更贴近薄弱知识点的题排在前面。"""
+    if not terms:
+        return 0
+    haystack = _keyword_norm(
+        " ".join(
+            [
+                str(item.get("question") or ""),
+                str(item.get("section") or ""),
+                str(item.get("intent") or ""),
+                str(item.get("source") or ""),
+                " ".join(item.get("keywords") or []),
+            ]
+        )
+    )
+    score = sum(2 for term in terms if term and term in haystack)
+    label = _keyword_norm(str(item.get("label") or ""))
+    if label and any(term in label for term in terms if term):
+        score += 3
+    full = _keyword_norm(" ".join(sorted(terms)))
+    if full and full in haystack:
+        score += 1
+    return score
 
 
 def drill_question(role_key: str, topic_hint: str = "") -> dict:
@@ -400,7 +430,14 @@ def drill_question(role_key: str, topic_hint: str = "") -> dict:
     if topic_terms:
         topic_pool = [item for item in pool if _topic_matches(item, topic_terms)]
         if topic_pool:
-            pool = topic_pool
+            topic_pool.sort(
+                key=lambda item: _topic_match_score(item, topic_terms),
+                reverse=True,
+            )
+            # 只在前 5 道高分题里抽一次，避免宽匹配随机导致看起来错位，
+            # 又保留一点点多样性，不会每次都做同一题。
+            head = topic_pool[:5] if len(topic_pool) > 5 else topic_pool
+            pool = head
             topic_matched = True
     item = random.choice(pool)
     # 真题库原文里偶尔夹着文档批注，如「（answers.md第46题已有）」，练习题面要干净。

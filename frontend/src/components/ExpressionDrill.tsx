@@ -580,11 +580,23 @@ export function ExpressionDrill({ seedTopic = '', seedRoleKey, seedToken = 0 }: 
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="text-xs font-medium text-zinc-500">
-              {question ? `真题 ${question.label || ''} · ${question.source}` : '选好岗位后取一道真题开始'}
+              {question
+                ? `真题编号 ${question.label || '未编号'}`
+                : '选好岗位后取一道真题开始'}
             </p>
             <p className="mt-1.5 text-[15px] font-medium leading-7 text-zinc-900">
               {question?.question ?? '点击右侧按钮，从你的真实面试题库里抽一道表达练习题。'}
             </p>
+            {question?.source && (
+              <p className="mt-1 text-xs leading-5 text-zinc-500">
+                来源文档：{question.source}
+              </p>
+            )}
+            {question?.topic_matched === false && (
+              <p className="mt-1 text-xs leading-5 text-amber-700">
+                真题库里暂未找到完全匹配的题，已从前 5 道相近真题中随机选了这题。
+              </p>
+            )}
           </div>
           <button
             type="button"

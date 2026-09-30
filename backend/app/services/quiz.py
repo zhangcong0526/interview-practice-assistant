@@ -2207,6 +2207,11 @@ def _build_learning_guide(
         if not item.get("is_correct")
     }
     current_topics = list(dict.fromkeys(str(item.get("topic") or "未分类") for item in graded))
+    current_modules = {
+        _topic_module(topic, catalog)
+        for topic in current_topics
+        if topic
+    }
 
     if is_mistake_redo:
         items_by_topic: dict[str, list[dict]] = {}
@@ -2217,6 +2222,10 @@ def _build_learning_guide(
             for topic in current_topics
             if topic in wrong_topics and topic in items_by_topic
         ]
+        if current_modules:
+            focus_topics = [
+                entry for entry in focus_topics if entry.get("module") in current_modules
+            ]
         focus_topics = [
             _decorate_focus_entry(
                 entry,
@@ -2309,6 +2318,10 @@ def _build_learning_guide(
                 )
             )
     focus_topics.sort(key=lambda item: (item["topic"] not in wrong_topics, item["accuracy"], -item["total"]))
+    if current_modules:
+        focus_topics = [
+            entry for entry in focus_topics if entry.get("module") in current_modules
+        ]
 
     type_stats = _aggregate_type_stats(mastery)
     module_stats = _module_stats(mastery, catalog, active_mistake_topics)

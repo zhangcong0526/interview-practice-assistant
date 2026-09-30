@@ -615,7 +615,7 @@ export function ExpressionDrill({
             )}
             {question?.topic_matched === false && (
               <p className="mt-1 text-xs leading-5 text-amber-700">
-                真题库里暂未找到完全匹配的题，已从前 5 道相近真题中随机选了这题。
+                真题库里暂未找到完全匹配的题，已选择一道最接近该知识点的真题。
               </p>
             )}
             {question?.disclaimer && (
@@ -650,7 +650,7 @@ export function ExpressionDrill({
             {busy === 'question'
               ? `正在根据薄弱知识点「${topicHint}」选题。`
               : question?.topic_matched === false
-                ? `真题库里暂时没有匹配「${topicHint}」的题，已随机选这题。练习方向仍按薄弱知识点定位；导入相关真题库后会优先命中。`
+                ? `真题库里暂时没有匹配「${topicHint}」的题，已选择最接近的一道真题。练习方向仍按薄弱知识点定位；导入相关真题库后会优先命中。`
                 : `已定位薄弱知识点：${topicHint}。本题来自相关真题。`}
           </p>
         )}

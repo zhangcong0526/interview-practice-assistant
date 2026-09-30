@@ -25,7 +25,11 @@ interface QuizResultProps {
   cumulativeMistakeCount: number
   onRetryMistakes: (paper: QuizPaper) => void
   onBackToSetup: () => void
-  onOpenExpression: (topic: string, module?: string) => void
+  onOpenExpression: (
+    topic: string,
+    module?: string,
+    sourceDocIds?: string[],
+  ) => void
 }
 
 const LEVEL_LABEL: Record<MasteryLevel, string> = {
@@ -57,6 +61,13 @@ export function QuizResult({
   const { review } = attempt
   const guide = review.learning_guide
   const wrongQuestions = attempt.questions.filter((item) => !item.is_correct)
+  const attemptDocIds = Array.from(
+    new Set(
+      attempt.questions
+        .map((item) => item.source_doc_id)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  )
   const currentTypeStats = QUESTION_TYPE_ORDER.map((type) => {
     const questions = attempt.questions.filter((item) => item.type === type)
     const correct = questions.filter((item) => item.is_correct).length
@@ -320,7 +331,7 @@ export function QuizResult({
                         <button
                           type="button"
                           className="inline-flex items-center gap-1 rounded-md bg-sky-600 px-2 py-1 text-[11px] font-semibold text-white transition hover:bg-sky-700 disabled:opacity-60"
-                          onClick={() => onOpenExpression(topic.topic, topic.module)}
+                          onClick={() => onOpenExpression(topic.topic, topic.module, attemptDocIds)}
                           disabled={Boolean(topicBusy)}
                         >
                           <Mic className="size-3" aria-hidden="true" />
@@ -413,7 +424,7 @@ export function QuizResult({
                   <button
                     type="button"
                     className="inline-flex items-center gap-1 rounded-md bg-sky-600 px-2 py-1 text-[11px] font-semibold text-white transition hover:bg-sky-700"
-                    onClick={() => onOpenExpression(topic.topic, topic.module)}
+                    onClick={() => onOpenExpression(topic.topic, topic.module, attemptDocIds)}
                   >
                     <Mic className="size-3" aria-hidden="true" />
                     去说一说

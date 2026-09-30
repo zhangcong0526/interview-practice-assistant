@@ -24,6 +24,7 @@ from .. import prompts
 from .. import roles as roles_service
 from . import llm as llm_service
 from . import question_bank
+from . import knowledge as knowledge_service
 
 
 class ExpressionError(RuntimeError):
@@ -35,6 +36,9 @@ KEYWORD_CACHE_DIR = settings.data_dir / "expression" / "keyword_cache"
 KEYWORD_CACHE_VERSION = "speaking-keywords-v2"
 SPEAKING_MATERIAL_CACHE_DIR = settings.data_dir / "expression" / "speaking_material_cache"
 SPEAKING_MATERIAL_CACHE_VERSION = "speaking-materials-v1"
+GENERATED_QUESTION_CACHE_DIR = settings.data_dir / "expression" / "generated_questions"
+GENERATED_QUESTION_CACHE_VERSION = "generated-questions-v1"
+GENERATED_QUESTION_TTL_SECONDS = 7 * 24 * 3600
 _SPEAKING_JOBS_LOCK = threading.Lock()
 _SPEAKING_JOBS: set[str] = set()
 _SPEAKING_WORK_LIMIT = threading.Semaphore(2)
@@ -405,7 +409,117 @@ def _topic_match_score(item: dict, terms: set[str]) -> int:
     return score
 
 
-def drill_question(role_key: str, topic_hint: str = "") -> dict:
+def _search_chunks_for_topic(topic: str, doc_ids: list[str] | None) -> list[dict]:
+    """在给定文档范围内检索与知识点相关的原文片段。"""
+    query = topic.strip()
+    if not query:
+        return []
+    try:
+        results = knowledge_service.search(query, limit=6)
+    except Exception:
+        return []
+    if not results:
+        return []
+    if doc_ids:
+        allowed = {str(doc_id) for doc_id in doc_ids if doc_id}
+        results = [r for r in results if str(r.get("doc_id") or "") in allowed]
+    return results[:3]
+
+
+def _generated_question_cache_key(
+    role_key: str,
+    topic_hint: str,
+    doc_ids: list[str] | None,
+) -> str:
+    payload = {
+        "role": role_key,
+        "topic": (topic_hint or "").strip().lower(),
+        "doc_ids": sorted({str(d) for d in (doc_ids or []) if d}),
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+
+def _load_generated_question(cache_key: str) -> dict | None:
+    path = GENERATED_QUESTION_CACHE_DIR / f"{cache_key}.json"
+    cached = _read_json(path)
+    if not cached:
+        return None
+    if cached.get("version") != GENERATED_QUESTION_CACHE_VERSION:
+        return None
+    expires_at = int(cached.get("expires_at") or 0)
+    if expires_at and expires_at < int(time.time()):
+        return None
+    return cached.get("payload")
+
+
+def _save_generated_question(cache_key: str, payload: dict) -> None:
+    try:
+        ensure_dirs()
+        path = GENERATED_QUESTION_CACHE_DIR / f"{cache_key}.json"
+        body = {
+            "version": GENERATED_QUESTION_CACHE_VERSION,
+            "created_at": int(time.time()),
+            "expires_at": int(time.time()) + GENERATED_QUESTION_TTL_SECONDS,
+            "payload": payload,
+        }
+        tmp_path = path.with_name(path.name + ".tmp")
+        _write_json(tmp_path, body)
+        os.replace(tmp_path, path)
+    except Exception:
+        # 缓存失败不能阻断主流程。
+        pass
+
+
+EXPRESSION_GENERATE_TIMEOUT_SECONDS = 35.0
+
+
+def _generate_question_via_llm(
+    role_name: str,
+    topic_hint: str,
+    chunks: list[dict],
+) -> dict | None:
+    """调用 LLM 根据原文片段生成一道表达练习题，失败返回 None。"""
+    if not chunks:
+        return None
+    try:
+        raw = llm_service.chat_json(
+            prompts.EXPRESSION_GENERATE_SYSTEM,
+            prompts.build_expression_generate_user(role_name, topic_hint, chunks),
+            max_tokens=1200,
+            timeout=EXPRESSION_GENERATE_TIMEOUT_SECONDS,
+        )
+    except Exception:
+        return None
+    if not isinstance(raw, dict):
+        return None
+    question = str(raw.get("question") or "").strip()
+    reference_answer = str(raw.get("reference_answer") or "").strip()
+    if not question or not reference_answer:
+        return None
+    keywords = [str(item).strip() for item in (raw.get("keywords") or []) if str(item).strip()]
+    key_points = [
+        str(item).strip()
+        for item in (raw.get("standard_key_points") or [])
+        if str(item).strip()
+    ]
+    reference_script = str(raw.get("reference_script") or "").strip()
+    source_title = str(raw.get("source_title") or "").strip() or (chunks[0].get("title") or "")
+    return {
+        "question": question,
+        "reference_answer": reference_answer,
+        "keywords": keywords[:8],
+        "standard_key_points": key_points[:5],
+        "reference_script": reference_script,
+        "source_title": source_title,
+    }
+
+
+def drill_question(
+    role_key: str,
+    topic_hint: str = "",
+    source_doc_ids: list[str] | None = None,
+) -> dict:
     """从该岗位的真题库里出一道表达练习题，避开最近练过的题。"""
     role = roles_service.get_role(role_key)
     if not role:
@@ -439,8 +553,60 @@ def drill_question(role_key: str, topic_hint: str = "") -> dict:
             head = topic_pool[:5] if len(topic_pool) > 5 else topic_pool
             pool = head
             topic_matched = True
+    generated_payload: dict | None = None
+    generated_by_llm = False
+    if (
+        not topic_matched
+        and topic_hint
+        and source_doc_ids
+    ):
+        cache_key = _generated_question_cache_key(role.key, topic_hint, source_doc_ids)
+        cached = _load_generated_question(cache_key)
+        if cached:
+            generated_payload = cached
+        else:
+            chunks = _search_chunks_for_topic(topic_hint, source_doc_ids)
+            if chunks:
+                generated_payload = _generate_question_via_llm(
+                    role.name, topic_hint, chunks
+                )
+                if generated_payload:
+                    _save_generated_question(cache_key, generated_payload)
+                    _prefetch_speaking_materials(
+                        generated_payload["question"],
+                        generated_payload["reference_answer"],
+                        generated_payload.get("keywords") or [],
+                    )
+        if generated_payload:
+            generated_by_llm = True
+
+    if generated_by_llm and generated_payload:
+        keywords, standard_key_points, reference_script = _speaking_materials(
+            generated_payload["question"],
+            generated_payload["reference_answer"],
+            generated_payload.get("keywords") or [],
+            allow_llm=False,
+        )
+        return {
+            "question": generated_payload["question"],
+            "label": f"AI-{cache_key[:8]}",
+            "source": generated_payload.get("source_title") or "",
+            "section": "",
+            "topic_matched": False,
+            "generated_by_llm": True,
+            "disclaimer": (
+                "本题目由 AI 基于所选资料自动生成，仅供表达练习，"
+                "可能与原文表述有差异。"
+            ),
+            "reference_answer": generated_payload["reference_answer"],
+            "keywords": keywords or generated_payload.get("keywords") or [],
+            "standard_key_points": standard_key_points,
+            "reference_script": reference_script,
+            "role_key": role.key,
+            "role_name": role.name,
+        }
+
     item = random.choice(pool)
-    # 真题库原文里偶尔夹着文档批注，如「（answers.md第46题已有）」，练习题面要干净。
     question = _drill_display_question(item)
     display_question = question or item["question"]
     keywords, standard_key_points, reference_script = _speaking_materials(
@@ -449,12 +615,19 @@ def drill_question(role_key: str, topic_hint: str = "") -> dict:
         item.get("keywords", []),
         allow_llm=False,
     )
+    fallback_disclaimer = None
+    if topic_hint and not topic_matched:
+        fallback_disclaimer = (
+            "本题来自现有真题库随机抽取，未必对应你的薄弱知识点，仅作临时练习。"
+        )
     return {
         "question": display_question,
         "label": item.get("label", ""),
         "source": item.get("source", ""),
         "section": item.get("section", ""),
         "topic_matched": topic_matched,
+        "generated_by_llm": False,
+        "disclaimer": fallback_disclaimer,
         "reference_answer": item.get("reference_answer", ""),
         "keywords": keywords,
         "standard_key_points": standard_key_points,

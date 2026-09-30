@@ -755,3 +755,47 @@ def build_expression_user(
         "请给出这一轮的表达教练反馈。",
     ]
     return "\n\n".join(lines)
+
+
+EXPRESSION_GENERATE_SCHEMA = """{
+  "question": "一道不超过 30 字的面试题，候选人需要口头讲清楚",
+  "reference_answer": "一段不超过 220 字的参考答案",
+  "keywords": ["来自原文的关键词1", "来自原文的关键词2"],
+  "standard_key_points": ["要点 1", "要点 2"],
+  "reference_script": "一段 180 到 300 字的可口述参考话术",
+  "source_title": "用于出题的那份资料标题"
+}"""
+
+
+EXPRESSION_GENERATE_SYSTEM = """你是一位面试表达训练的出题老师，会根据用户给定的薄弱知识点和资料原文，临时出一道贴近该知识点的练习题，并准备一份参考答案。
+
+严格要求：
+1. 必须只从用户提供的【资料原文片段】里取材，禁止补充原文里没有的事实、数据、工具或结论。
+2. 题面用第一人称或场景化口吻提出，不要写“请你回答……”，控制在 30 字以内，让人一看就知道要讲什么。
+3. 参考答案要简练、像口语，控制在 220 字以内，关键概念必须出现在原文片段中。
+4. 关键词 5 到 8 个，全部来自题干或参考答案原文，禁止补充答案中没有的内容。
+6. 参考话术 180 到 300 字，按“结论 -> 关键原因/细节 -> 收束”组织，只重组原文已有内容，不编造新细节。
+7. source_title 必须挑出最相关的那份资料原文标题，作为本题依据。
+8. 只输出 JSON，不要任何额外解释。""" + EXPRESSION_GENERATE_SCHEMA
+
+
+def build_expression_generate_user(
+    role_name: str,
+    topic_hint: str,
+    source_chunks: list[dict],
+) -> str:
+    chunk_lines = []
+    for index, chunk in enumerate(source_chunks, start=1):
+        title = str(chunk.get("title") or "").strip()
+        doc_id = str(chunk.get("doc_id") or "").strip()
+        text = str(chunk.get("text") or "").strip()
+        chunk_lines.append(
+            f"【资料片段 {index}】标题：{title or '未命名'}（doc_id={doc_id}）\n{text[:900]}"
+        )
+    blocks = [
+        f"【练习方向】{role_name}",
+        f"【薄弱知识点】{topic_hint.strip()}",
+        "【资料原文片段】\n" + "\n\n".join(chunk_lines) if chunk_lines else "（无可用原文片段）",
+        "请只使用以上原文片段里的内容生成一道针对该薄弱知识点的表达练习题。",
+    ]
+    return "\n\n".join(blocks)

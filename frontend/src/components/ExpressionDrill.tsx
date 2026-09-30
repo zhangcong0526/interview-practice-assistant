@@ -167,9 +167,15 @@ interface ExpressionDrillProps {
   seedTopic?: string
   seedRoleKey?: string
   seedToken?: number
+  seedSourceDocIds?: string[]
 }
 
-export function ExpressionDrill({ seedTopic = '', seedRoleKey, seedToken = 0 }: ExpressionDrillProps) {
+export function ExpressionDrill({
+  seedTopic = '',
+  seedRoleKey,
+  seedToken = 0,
+  seedSourceDocIds = [],
+}: ExpressionDrillProps) {
   const [roles, setRoles] = useState<InterviewRoleOption[]>([])
   const [roleKey, setRoleKey] = useState(
     () => seedRoleKey ?? window.localStorage.getItem('opc-expression-role') ?? 'ai_qa',
@@ -190,6 +196,7 @@ export function ExpressionDrill({ seedTopic = '', seedRoleKey, seedToken = 0 }: 
   const [error, setError] = useState('')
   const timerRef = useRef<number | null>(null)
   const seededTokenRef = useRef(seedToken)
+  const seededDocIdsRef = useRef<string[]>(seedSourceDocIds)
   const startedAtRef = useRef(0)
   const streamRef = useRef<MediaStream | null>(null)
   const recorderRef = useRef<MediaRecorder | null>(null)
@@ -234,7 +241,7 @@ export function ExpressionDrill({ seedTopic = '', seedRoleKey, seedToken = 0 }: 
   }, [])
 
   const loadQuestion = useCallback(
-    async (key: string, hint = '') => {
+    async (key: string, hint = '', docIds: string[] = []) => {
       answerRoundRef.current += 1
       cancelActiveRecording()
       setBusy('question')
@@ -245,7 +252,7 @@ export function ExpressionDrill({ seedTopic = '', seedRoleKey, seedToken = 0 }: 
       setRetryMissedPoints([])
       try {
         setTopicHint(hint)
-        setQuestion(await getExpressionQuestion(key, hint))
+        setQuestion(await getExpressionQuestion(key, hint, docIds))
       } catch (loadError) {
         setError(loadError instanceof Error ? loadError.message : '取题失败。')
       } finally {
@@ -264,7 +271,7 @@ export function ExpressionDrill({ seedTopic = '', seedRoleKey, seedToken = 0 }: 
       if (initial !== roleKey) {
         setRoleKey(initial)
       }
-      void loadQuestion(initial, seedTopic)
+      void loadQuestion(initial, seedTopic, seedSourceDocIds)
     })
     void refreshProgress()
     // 只在首次挂载时加载岗位和题目；切换岗位由 chooseRole 显式触发，避免重复取题。
@@ -274,7 +281,8 @@ export function ExpressionDrill({ seedTopic = '', seedRoleKey, seedToken = 0 }: 
   useEffect(() => {
     if (seedToken > 0 && seedToken !== seededTokenRef.current && seedTopic) {
       seededTokenRef.current = seedToken
-      void loadQuestion(roleKey, seedTopic)
+      seededDocIdsRef.current = seedSourceDocIds
+      void loadQuestion(roleKey, seedTopic, seedSourceDocIds)
     }
     // seedTopic/roleKey 只是为本次新种子服务，避免旧话题在切换岗位后反复触发。
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -595,6 +603,11 @@ export function ExpressionDrill({ seedTopic = '', seedRoleKey, seedToken = 0 }: 
             {question?.topic_matched === false && (
               <p className="mt-1 text-xs leading-5 text-amber-700">
                 真题库里暂未找到完全匹配的题，已从前 5 道相近真题中随机选了这题。
+              </p>
+            )}
+            {question?.disclaimer && (
+              <p className="mt-1 text-xs leading-5 text-amber-700">
+                {question.disclaimer}
               </p>
             )}
           </div>

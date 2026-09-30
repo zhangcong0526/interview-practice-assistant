@@ -517,11 +517,16 @@ export async function generateReviewPractice(
 export async function getExpressionQuestion(
   roleKey: string,
   topicHint = '',
+  sourceDocIds: string[] = [],
 ): Promise<ExpressionQuestion> {
   return apiFetch<ExpressionQuestion>('/expression/question', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ role_key: roleKey, topic: topicHint }),
+    body: JSON.stringify({
+      role_key: roleKey,
+      topic: topicHint,
+      source_doc_ids: sourceDocIds,
+    }),
   })
 }
 

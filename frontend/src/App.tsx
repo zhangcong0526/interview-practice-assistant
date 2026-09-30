@@ -137,6 +137,7 @@ export default function App() {
     topic: string
     roleKey?: string
     token: number
+    sourceDocIds?: string[]
   } | null>(null)
 
   useEffect(() => {
@@ -193,11 +194,19 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }, [])
 
-  const openExpressionTopic = useCallback((topic: string, module?: string) => {
-    setExpressionSeed({ topic, roleKey: inferExpressionRole(topic, module), token: Date.now() })
-    setView('expression')
-    window.scrollTo({ top: 0, behavior: 'smooth' })
-  }, [])
+  const openExpressionTopic = useCallback(
+    (topic: string, module?: string, sourceDocIds?: string[]) => {
+      setExpressionSeed({
+        topic,
+        roleKey: inferExpressionRole(topic, module),
+        token: Date.now(),
+        sourceDocIds: sourceDocIds ?? [],
+      })
+      setView('expression')
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+    },
+    [],
+  )
 
   const handleGraded = useCallback(
     async (next: QuizAttempt) => {
@@ -490,6 +499,7 @@ export default function App() {
               seedTopic={expressionSeed?.topic ?? ''}
               seedRoleKey={expressionSeed?.roleKey}
               seedToken={expressionSeed?.token ?? 0}
+              seedSourceDocIds={expressionSeed?.sourceDocIds ?? []}
             />
           </div>
         )}

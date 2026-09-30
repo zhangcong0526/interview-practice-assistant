@@ -115,6 +115,7 @@ class MistakeQuizRequest(BaseModel):
 class ExpressionQuestionRequest(BaseModel):
     role_key: str = "robot_hardware"
     topic: str = Field(default="", max_length=200)
+    source_doc_ids: list[str] = Field(default_factory=list)
 
 
 class ExpressionAnalyzeRequest(BaseModel):

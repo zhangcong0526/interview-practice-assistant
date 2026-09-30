@@ -234,6 +234,8 @@ export interface ExpressionQuestion {
   source: string
   section: string
   topic_matched?: boolean
+  generated_by_llm?: boolean
+  disclaimer?: string
   role_key: string
   role_name: string
   reference_answer: string
@@ -398,6 +400,8 @@ export interface GradedQuestion {
   is_correct: boolean
   explanation: string
   source_title: string
+  source_doc_id?: string
+  source_chunk_ids?: string[]
   user_answer_text: string
   correct_answer_text: string
 }

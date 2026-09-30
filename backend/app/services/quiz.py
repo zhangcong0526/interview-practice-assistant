@@ -1881,6 +1881,35 @@ def _focus_source_titles(
     return titles[:3]
 
 
+def _filter_focus_by_current_topics(
+    focus_topics: list[dict],
+    current_topics: list[str],
+    limit: int = 5,
+) -> list[dict]:
+    if not focus_topics:
+        return focus_topics
+    if not current_topics:
+        return focus_topics[:limit]
+    combined = " ".join(current_topics)
+    combined_norm = combined.lower()
+    scored: list[tuple[int, dict]] = []
+    for entry in focus_topics:
+        topic = str(entry.get("topic") or "")
+        parts = [p for p in re.split(r"[\s/、，,;；|+]+", topic) if p and len(p) >= 2]
+        hit = sum(
+            1
+            for p in parts
+            if p.lower() in combined_norm or p in combined
+        )
+        scored.append((hit, entry))
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    if not scored or scored[0][0] == 0:
+        # 没有任何主题词命中当前试卷时，按历史掌握度兜底返回前 5 个，避免“空”感。
+        return focus_topics[:limit]
+    kept = [entry for score, entry in scored if score > 0]
+    return kept[:limit]
+
+
 def _decorate_focus_entry(
     entry: dict,
     graded: list[dict],
@@ -2226,6 +2255,7 @@ def _build_learning_guide(
             focus_topics = [
                 entry for entry in focus_topics if entry.get("module") in current_modules
             ]
+        focus_topics = _filter_focus_by_current_topics(focus_topics, current_topics)
         focus_topics = [
             _decorate_focus_entry(
                 entry,
@@ -2322,6 +2352,7 @@ def _build_learning_guide(
         focus_topics = [
             entry for entry in focus_topics if entry.get("module") in current_modules
         ]
+    focus_topics = _filter_focus_by_current_topics(focus_topics, current_topics)
 
     type_stats = _aggregate_type_stats(mastery)
     module_stats = _module_stats(mastery, catalog, active_mistake_topics)

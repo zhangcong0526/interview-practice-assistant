@@ -1884,29 +1884,34 @@ def _focus_source_titles(
 def _filter_focus_by_current_topics(
     focus_topics: list[dict],
     current_topics: list[str],
-    limit: int = 3,
+    fallback_limit: int = 3,
+    strong_limit: int = 5,
 ) -> list[dict]:
     if not focus_topics:
         return focus_topics
     if not current_topics:
-        return focus_topics[:limit]
+        return focus_topics[:fallback_limit]
     combined = " ".join(current_topics)
     combined_norm = combined.lower()
     scored: list[tuple[int, dict]] = []
     for entry in focus_topics:
         topic = str(entry.get("topic") or "")
         parts = [p for p in re.split(r"[\s/、，,;；|+]+", topic) if p and len(p) >= 2]
-        hit = sum(
-            1
-            for p in parts
-            if p.lower() in combined_norm or p in combined
-        )
+        hit = 0
+        for p in parts:
+            if not (p.lower() in combined_norm or p in combined):
+                continue
+            # 长词权重更高，避免“RAG / 检索 / 生成”这种短词乱命中。
+            hit += 2 if len(p) >= 4 else 1
         scored.append((hit, entry))
     scored.sort(key=lambda pair: pair[0], reverse=True)
     if not scored or scored[0][0] == 0:
-        # 没有任何主题词命中当前试卷时，按历史掌握度兜底返回前 5 个，避免“空”感。
-        return focus_topics[:limit]
+        # 没有任何主题词命中当前试卷时，按历史掌握度兜底返回前 N 个，避免“空”感。
+        return focus_topics[:fallback_limit]
     kept = [entry for score, entry in scored if score > 0]
+    # 强相关（最高得分 ≥ 2）时多展示几个，弱相关时只保留最贴近的。
+    max_score = scored[0][0]
+    limit = strong_limit if max_score >= 2 else fallback_limit
     return kept[:limit]
 
 
@@ -1928,6 +1933,16 @@ def _decorate_focus_entry(
         entry["current_stats"] = _focus_stat(current_stat)
     if history_stat:
         entry["history_stats"] = _focus_stat(history_stat)
+        updated_at = int(history_stat.get("updated_at") or 0)
+        if updated_at:
+            days = max(0, (int(time.time()) - updated_at) // 86_400)
+            entry["last_seen_days"] = days
+            if days >= 14:
+                reasons = list(entry.get("reasons") or [])
+                reason = f"最近 {days} 天未巩固"
+                if reason not in reasons:
+                    reasons.append(reason)
+                    entry["reasons"] = reasons
 
     type_gaps: list[dict] = []
     for qtype in VALID_TYPES:

@@ -29,6 +29,7 @@ interface QuizResultProps {
     topic: string,
     module?: string,
     sourceDocIds?: string[],
+    sourceTag?: string,
   ) => void
 }
 
@@ -331,7 +332,9 @@ export function QuizResult({
                         <button
                           type="button"
                           className="inline-flex items-center gap-1 rounded-md bg-sky-600 px-2 py-1 text-[11px] font-semibold text-white transition hover:bg-sky-700 disabled:opacity-60"
-                          onClick={() => onOpenExpression(topic.topic, topic.module, attemptDocIds)}
+                          onClick={() =>
+                            onOpenExpression(topic.topic, topic.module, attemptDocIds, 'result_page')
+                          }
                           disabled={Boolean(topicBusy)}
                         >
                           <Mic className="size-3" aria-hidden="true" />
@@ -408,7 +411,11 @@ export function QuizResult({
           </button>
         </div>
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-emerald-50 px-3 py-2.5 text-xs text-emerald-800">
-          <span>本次错题与薄弱知识点已同步到错题复盘。</span>
+          <span>
+            {attempt.review_sync_error
+              ? '本次错题复盘同步未完成，可在错题复盘页重试；本地分数和答题记录已保存。'
+              : '本次错题与薄弱知识点已同步到错题复盘。'}
+          </span>
         </div>
         {error && <p className="mt-3 text-sm leading-5 text-red-600">{error}</p>}
       </section>
@@ -424,7 +431,9 @@ export function QuizResult({
                   <button
                     type="button"
                     className="inline-flex items-center gap-1 rounded-md bg-sky-600 px-2 py-1 text-[11px] font-semibold text-white transition hover:bg-sky-700"
-                    onClick={() => onOpenExpression(topic.topic, topic.module, attemptDocIds)}
+                    onClick={() =>
+                      onOpenExpression(topic.topic, topic.module, attemptDocIds, 'result_page')
+                    }
                   >
                     <Mic className="size-3" aria-hidden="true" />
                     去说一说

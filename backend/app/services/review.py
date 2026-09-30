@@ -17,6 +17,8 @@ from ..config import settings
 
 
 REVIEW_FILE = settings.data_dir / "quiz" / "review_schedule.json"
+SYNC_QUEUE_FILE = settings.data_dir / "quiz" / "review_sync_queue.json"
+REVIEW_META_FILE = settings.data_dir / "quiz" / "review_meta.json"
 REVIEW_STAGES = (1, 3, 7, 15)
 ERROR_CAUSES = ("概念不清", "概念混淆", "粗心", "超纲")
 
@@ -40,6 +42,31 @@ def _question_id(topic: str, qtype: str, stem: str, correct_answer: list[str]) -
         ]
     )
     return "q_" + hashlib.sha1(payload.encode("utf-8")).hexdigest()
+
+
+def _grade_fingerprint(graded: list[dict], paper: dict) -> str:
+    payload = {
+        "paper_id": str(paper.get("paper_id") or ""),
+        "answers": [
+            {
+                "topic": str(question.get("topic") or ""),
+                "type": str(question.get("type") or ""),
+                "stem": str(question.get("stem") or ""),
+                "user_answer": list(question.get("user_answer") or []),
+                "user_answer_text": str(question.get("user_answer_text") or ""),
+                "is_correct": bool(question.get("is_correct")),
+            }
+            for question in graded
+            if isinstance(question, dict)
+        ],
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha1(encoded.encode("utf-8")).hexdigest()
 
 
 def _start_of_next_day(now: int | None = None) -> int:
@@ -69,6 +96,186 @@ def _save_state(state: dict) -> None:
         json.dumps(state, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+
+def _processed_grade_entries(state: dict) -> list[dict]:
+    entries = state.get("processed_grades")
+    if not isinstance(entries, list):
+        entries = []
+    entries = [item for item in entries if isinstance(item, dict)]
+    state["processed_grades"] = entries
+    return entries
+
+
+def _find_processed_grade(state: dict, fingerprint: str) -> dict | None:
+    return next(
+        (
+            item
+            for item in _processed_grade_entries(state)
+            if item.get("fingerprint") == fingerprint
+        ),
+        None,
+    )
+
+
+def _remember_processed_grade(
+    state: dict,
+    fingerprint: str,
+    result: dict,
+    now: int,
+    completion_key: str = "",
+) -> None:
+    entries = _processed_grade_entries(state)
+    entries.append(
+        {
+            "fingerprint": fingerprint,
+            "result": result,
+            "processed_at": now,
+            "completion_key": completion_key,
+        }
+    )
+    state["processed_grades"] = entries[-200:]
+
+
+def _load_json_file(path: Path, default: dict) -> dict:
+    if not path.exists():
+        return dict(default)
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return dict(default)
+    return loaded if isinstance(loaded, dict) else dict(default)
+
+
+def _save_json_file(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _load_sync_queue() -> dict:
+    state = _load_json_file(
+        SYNC_QUEUE_FILE,
+        {"schema_version": 1, "pending": []},
+    )
+    if not isinstance(state.get("pending"), list):
+        state["pending"] = []
+    state["pending"] = [item for item in state["pending"] if isinstance(item, dict)]
+    return state
+
+
+def _save_sync_queue(state: dict) -> None:
+    _save_json_file(SYNC_QUEUE_FILE, state)
+
+
+def enqueue_failed_sync(graded: list[dict], paper: dict, error: Exception) -> None:
+    state = _load_sync_queue()
+    state["pending"].append(
+        {
+            "sync_id": "sync_" + uuid.uuid4().hex,
+            "graded": graded,
+            "paper": paper,
+            "error": repr(error),
+            "attempts": 0,
+            "created_at": int(time.time()),
+            "last_attempt_at": 0,
+        }
+    )
+    _save_sync_queue(state)
+
+
+def retry_pending_syncs() -> dict:
+    state = _load_sync_queue()
+    remaining: list[dict] = []
+    retried = 0
+    now = int(time.time())
+    for item in state["pending"]:
+        try:
+            sync_grade(item.get("graded") or [], item.get("paper") or {})
+            retried += 1
+        except Exception as exc:
+            item["attempts"] = int(item.get("attempts") or 0) + 1
+            item["last_attempt_at"] = now
+            item["last_error"] = repr(exc)
+            remaining.append(item)
+    state["pending"] = remaining
+    _save_sync_queue(state)
+    return {
+        "retried": retried,
+        "pending_count": len(remaining),
+    }
+
+
+def _local_date(now: int) -> str:
+    return datetime.fromtimestamp(int(now)).strftime("%Y-%m-%d")
+
+
+def _load_review_meta() -> dict:
+    meta = _load_json_file(
+        REVIEW_META_FILE,
+        {
+            "schema_version": 1,
+            "current_streak": 0,
+            "longest_streak": 0,
+            "last_completion_date": "",
+            "total_completed_days": 0,
+            "total_passed_sessions": 0,
+            "completed_paper_keys": [],
+        },
+    )
+    for key in (
+        "current_streak",
+        "longest_streak",
+        "total_completed_days",
+        "total_passed_sessions",
+    ):
+        meta[key] = max(0, int(meta.get(key) or 0))
+    meta["last_completion_date"] = str(meta.get("last_completion_date") or "")
+    if not isinstance(meta.get("completed_paper_keys"), list):
+        meta["completed_paper_keys"] = []
+    meta["completed_paper_keys"] = [
+        str(item) for item in meta["completed_paper_keys"] if item
+    ]
+    return meta
+
+
+def update_completion_streak(now: int | None = None, completion_key: str = "") -> dict:
+    now = int(now if now is not None else time.time())
+    completion_date = _local_date(now)
+    meta = _load_review_meta()
+    completion_key = str(completion_key)
+    if completion_key and completion_key in meta["completed_paper_keys"]:
+        _save_json_file(REVIEW_META_FILE, meta)
+        return meta
+
+    meta["total_passed_sessions"] += 1
+
+    if completion_key:
+        meta["completed_paper_keys"].append(completion_key)
+    is_new_day = meta["last_completion_date"] != completion_date
+
+    if meta["last_completion_date"] == completion_date:
+        pass
+    elif meta["last_completion_date"]:
+        last_day = datetime.strptime(meta["last_completion_date"], "%Y-%m-%d").date()
+        current_day = datetime.strptime(completion_date, "%Y-%m-%d").date()
+        meta["current_streak"] = (
+            meta["current_streak"] + 1
+            if (current_day - last_day).days == 1
+            else 1
+        )
+    else:
+        meta["current_streak"] = 1
+
+    meta["last_completion_date"] = completion_date
+    if is_new_day:
+        meta["total_completed_days"] += 1
+    meta["longest_streak"] = max(meta["longest_streak"], meta["current_streak"])
+    meta["completed_paper_keys"] = meta["completed_paper_keys"][-500:]
+    _save_json_file(REVIEW_META_FILE, meta)
+    return meta
 
 
 def _record_by_question_id(records: list[dict], question_id: str) -> dict | None:
@@ -173,13 +380,13 @@ def migrate_legacy_mistakes() -> int:
     return created
 
 
-def sync_wrong_answers(graded: list[dict], paper: dict) -> None:
+def sync_wrong_answers(graded: list[dict], paper: dict) -> dict:
     """普通交卷后同步错题；答对只保留现有错题本行为，不推进复盘。"""
     state = _load_state()
     records = state["records"]
     now = int(time.time())
     next_review_at = _start_of_next_day(now)
-    changed = False
+    synced_wrong = 0
 
     for question in graded:
         if not isinstance(question, dict) or question.get("is_correct"):
@@ -194,9 +401,7 @@ def sync_wrong_answers(graded: list[dict], paper: dict) -> None:
         if not record:
             record = _base_record(question, paper, now)
             records.append(record)
-            changed = True
         else:
-            changed = True
             record["wrong_count"] = max(1, int(record.get("wrong_count") or 0) + 1)
             record["status"] = "active"
             record["review_stage"] = 0
@@ -209,9 +414,10 @@ def sync_wrong_answers(graded: list[dict], paper: dict) -> None:
         record["next_review_at"] = next_review_at
         record["user_answer_text"] = str(question.get("user_answer_text") or "")
         record["updated_at"] = now
+        synced_wrong += 1
 
-    if changed:
-        _save_state(state)
+    _save_state(state)
+    return {"synced_wrong": synced_wrong}
 
 
 def archive_by_question_key(key: str) -> None:
@@ -262,16 +468,42 @@ def complete_review_practice(graded: list[dict], paper: dict) -> dict | None:
             record["next_review_at"] = 0
         else:
             record["next_review_at"] = now + REVIEW_STAGES[record["review_stage"] - 1] * 86_400
+    result = {"passed": passed, "review_count": len(records)}
+    completion_key = "paper:" + str(paper.get("paper_id") or "")
+    _remember_processed_grade(
+        state,
+        _grade_fingerprint(graded, paper),
+        result,
+        now,
+        completion_key if passed else "",
+    )
     _save_state(state)
-    return {"passed": passed, "review_count": len(records)}
+    if passed:
+        update_completion_streak(now, completion_key)
+    return result
 
 
 def sync_grade(graded: list[dict], paper: dict) -> dict | None:
+    fingerprint = _grade_fingerprint(graded, paper)
+    state = _load_state()
+    processed = _find_processed_grade(state, fingerprint)
+    if processed:
+        completion_key = str(processed.get("completion_key") or "")
+        if completion_key:
+            update_completion_streak(
+                int(processed.get("processed_at") or time.time()),
+                completion_key,
+            )
+        return processed.get("result")
+
     context = paper.get("generation_context") if isinstance(paper.get("generation_context"), dict) else {}
     if context.get("kind") == "review_practice":
         return complete_review_practice(graded, paper)
-    sync_wrong_answers(graded, paper)
-    return None
+    result = sync_wrong_answers(graded, paper)
+    state = _load_state()
+    _remember_processed_grade(state, fingerprint, result, int(time.time()), "")
+    _save_state(state)
+    return result
 
 
 def update_error_cause(review_id: str, cause: str) -> dict:
@@ -307,6 +539,8 @@ def list_records() -> list[dict]:
 def get_dashboard() -> dict:
     migrate_legacy_mistakes()
     records = _load_state()["records"]
+    meta = _load_review_meta()
+    pending_count = len(_load_sync_queue()["pending"])
     now = int(time.time())
     due = [
         item
@@ -345,6 +579,10 @@ def get_dashboard() -> dict:
         "active_count": sum(item.get("status") == "active" for item in records),
         "graduated_count": sum(item.get("status") == "graduated" for item in records),
         "archived_count": sum(item.get("status") == "archived" for item in records),
+        "sync_pending_count": pending_count,
+        "current_streak": meta["current_streak"],
+        "longest_streak": meta["longest_streak"],
+        "total_completed_days": meta["total_completed_days"],
         "tasks": sorted_tasks,
         "updated_at": now,
     }

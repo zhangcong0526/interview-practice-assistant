@@ -21,7 +21,11 @@ class ReviewApiSmokeTests(unittest.TestCase):
         quiz_dir = data_dir / "quiz"
         self.review_file = quiz_dir / "review_schedule.json"
         self._originals = {
-            "review": review_service.REVIEW_FILE,
+            "review": (
+                review_service.REVIEW_FILE,
+                review_service.SYNC_QUEUE_FILE,
+                review_service.REVIEW_META_FILE,
+            ),
             "quiz": (
                 quiz_service.QUIZ_DIR,
                 quiz_service.PAPERS_DIR,
@@ -33,6 +37,8 @@ class ReviewApiSmokeTests(unittest.TestCase):
             ),
         }
         review_service.REVIEW_FILE = self.review_file
+        review_service.SYNC_QUEUE_FILE = quiz_dir / "review_sync_queue.json"
+        review_service.REVIEW_META_FILE = quiz_dir / "review_meta.json"
         quiz_service.QUIZ_DIR = quiz_dir
         quiz_service.PAPERS_DIR = quiz_dir / "papers"
         quiz_service.ATTEMPTS_DIR = quiz_dir / "attempts"
@@ -44,7 +50,11 @@ class ReviewApiSmokeTests(unittest.TestCase):
         self.client = TestClient(app)
 
     def tearDown(self):
-        review_service.REVIEW_FILE = self._originals["review"]
+        (
+            review_service.REVIEW_FILE,
+            review_service.SYNC_QUEUE_FILE,
+            review_service.REVIEW_META_FILE,
+        ) = self._originals["review"]
         (
             quiz_service.QUIZ_DIR,
             quiz_service.PAPERS_DIR,
@@ -130,6 +140,13 @@ class ReviewApiSmokeTests(unittest.TestCase):
 
         self.assertEqual(200, practice.status_code)
         self.assertEqual("review_practice", practice.json()["generation_context"]["kind"])
+
+    def test_sync_retry_endpoint(self):
+        retry = self.client.post("/api/quiz/review/sync-retry")
+
+        self.assertEqual(200, retry.status_code)
+        self.assertEqual(0, retry.json()["retried"])
+        self.assertEqual(0, retry.json()["pending_count"])
 
 
 if __name__ == "__main__":

@@ -242,6 +242,7 @@ export interface ExpressionQuestion {
   keywords: string[]
   standard_key_points?: string[]
   reference_script?: string
+  source_tag?: string
 }
 
 export interface ExpressionMetrics {
@@ -401,6 +402,7 @@ export interface GradedQuestion {
   explanation: string
   source_title: string
   source_doc_id?: string
+  source_docs?: { doc_id?: string; title?: string }[]
   source_chunk_ids?: string[]
   user_answer_text: string
   correct_answer_text: string
@@ -539,6 +541,7 @@ export interface QuizAttempt {
   total: number
   questions: GradedQuestion[]
   review: QuizReview
+  review_sync_error?: string
   created_at: number
 }
 
@@ -628,6 +631,10 @@ export interface ReviewDashboard {
   active_count: number
   graduated_count: number
   archived_count: number
+  sync_pending_count?: number
+  current_streak?: number
+  longest_streak?: number
+  total_completed_days?: number
   tasks: ReviewTask[]
   updated_at: number
 }
@@ -671,6 +678,9 @@ export interface QuizGenerateRequest {
   judge: number
   difficulty: string
   focus_weak?: boolean
+  mode?: 'normal' | 'weak_board'
+  direction_id?: string
+  knowledge_point_ids?: string[]
 }
 
 export type MistakeQuizScope = 'current' | 'all'

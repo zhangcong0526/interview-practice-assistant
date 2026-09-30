@@ -5,10 +5,12 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from queue import Queue
 from unittest.mock import patch
 
 from backend.app.services import quiz as quiz_service
 from backend.app.services import review as review_service
+from backend.app.services import expression as expression_service
 
 
 class ReviewScheduleTests(unittest.TestCase):
@@ -18,7 +20,11 @@ class ReviewScheduleTests(unittest.TestCase):
         quiz_dir = self.data_dir / "quiz"
         self.review_file = quiz_dir / "review_schedule.json"
         self._originals = {
-            "review": (review_service.REVIEW_FILE,),
+            "review": (
+                review_service.REVIEW_FILE,
+                review_service.SYNC_QUEUE_FILE,
+                review_service.REVIEW_META_FILE,
+            ),
             "quiz": (
                 quiz_service.QUIZ_DIR,
                 quiz_service.PAPERS_DIR,
@@ -30,6 +36,8 @@ class ReviewScheduleTests(unittest.TestCase):
             ),
         }
         review_service.REVIEW_FILE = self.review_file
+        review_service.SYNC_QUEUE_FILE = quiz_dir / "review_sync_queue.json"
+        review_service.REVIEW_META_FILE = quiz_dir / "review_meta.json"
         quiz_service.QUIZ_DIR = quiz_dir
         quiz_service.PAPERS_DIR = quiz_dir / "papers"
         quiz_service.ATTEMPTS_DIR = quiz_dir / "attempts"
@@ -42,6 +50,8 @@ class ReviewScheduleTests(unittest.TestCase):
     def tearDown(self):
         (
             review_service.REVIEW_FILE,
+            review_service.SYNC_QUEUE_FILE,
+            review_service.REVIEW_META_FILE,
         ) = self._originals["review"]
         (
             quiz_service.QUIZ_DIR,
@@ -240,6 +250,129 @@ class ReviewScheduleTests(unittest.TestCase):
             review_service.update_error_cause(review_id, "不存在的错因")
 
         self.assertEqual(["概念不清"], record["error_causes"])
+
+    def test_failed_sync_can_be_retried(self):
+        question = self._question()
+        paper = self._paper([question])
+        review_service.enqueue_failed_sync(
+            [question],
+            paper,
+            RuntimeError("temporary sync failure"),
+        )
+
+        result = review_service.retry_pending_syncs()
+
+        self.assertEqual({"retried": 1, "pending_count": 0}, result)
+        self.assertEqual(1, len(review_service.list_records()))
+
+    def test_review_streak_counts_one_day_once(self):
+        day1 = int(time.mktime(time.strptime("2026-09-01 10:00:00", "%Y-%m-%d %H:%M:%S")))
+        day2 = day1 + 86400
+
+        meta1 = review_service.update_completion_streak(day1)
+        same_day = review_service.update_completion_streak(day1 + 3600)
+        meta2 = review_service.update_completion_streak(day2)
+
+        self.assertEqual(1, meta1["current_streak"])
+        self.assertEqual(1, same_day["total_completed_days"])
+        self.assertEqual(2, same_day["total_passed_sessions"])
+        self.assertEqual(2, meta2["current_streak"])
+        self.assertEqual(2, meta2["longest_streak"])
+        self.assertEqual(2, meta2["total_completed_days"])
+
+    def test_generated_expression_question_is_cached(self):
+        expression_dir = self.data_dir / "expression"
+        generated_dir = expression_dir / "generated_questions"
+        originals = {
+            "session_dir": expression_service.SESSION_DIR,
+            "keyword_dir": expression_service.KEYWORD_CACHE_DIR,
+            "material_dir": expression_service.SPEAKING_MATERIAL_CACHE_DIR,
+            "generated_dir": expression_service.GENERATED_QUESTION_CACHE_DIR,
+        }
+        expression_service.SESSION_DIR = expression_dir / "sessions"
+        expression_service.KEYWORD_CACHE_DIR = expression_dir / "keyword_cache"
+        expression_service.SPEAKING_MATERIAL_CACHE_DIR = expression_dir / "materials"
+        expression_service.GENERATED_QUESTION_CACHE_DIR = generated_dir
+        payload = {
+            "question": "请解释固定大小分块怎么配置？",
+            "reference_answer": "固定大小分块会设置 chunk_size 和 overlap。",
+            "keywords": ["固定大小分块"],
+        }
+        try:
+            with patch(
+                "backend.app.services.expression._get_or_start_generation",
+                return_value=Queue(),
+            ) as fake_start:
+                fake_start.return_value.put_nowait(payload)
+                with (
+                    patch("backend.app.services.expression._topic_matches", return_value=False),
+                    patch(
+                        "backend.app.services.expression._search_chunks_for_topic",
+                        return_value=[{"title": "RAG 讲义"}],
+                    ),
+                ):
+                    first = expression_service.drill_question(
+                        "ai_app_dev",
+                        "固定大小分块",
+                        ["doc_rag"],
+                        "wrong_review",
+                    )
+                    second = expression_service.drill_question(
+                        "ai_app_dev",
+                        "固定大小分块",
+                        ["doc_rag"],
+                        "wrong_review",
+                    )
+            self.assertTrue(generated_dir.exists())
+            self.assertEqual(1, fake_start.call_count)
+            self.assertEqual(first["question"], second["question"])
+        finally:
+            expression_service.SESSION_DIR = originals["session_dir"]
+            expression_service.KEYWORD_CACHE_DIR = originals["keyword_dir"]
+            expression_service.SPEAKING_MATERIAL_CACHE_DIR = originals["material_dir"]
+            expression_service.GENERATED_QUESTION_CACHE_DIR = originals["generated_dir"]
+
+    def test_slow_generation_returns_close_question_quickly(self):
+        expression_dir = self.data_dir / "expression"
+        question_item = {
+            "label": "AD1",
+            "question": "请解释固定大小分块的 chunk_size 和 overlap？",
+            "reference_answer": "chunk_size 是每块长度，overlap 是相邻块重叠。",
+            "keywords": ["固定大小分块"],
+        }
+        originals = {
+            "fast_wait": expression_service.EXPRESSION_GENERATE_FAST_WAIT_SECONDS,
+        }
+        expression_service.EXPRESSION_GENERATE_FAST_WAIT_SECONDS = 0.1
+        try:
+            with (
+                patch(
+                    "backend.app.services.question_bank.load_role_questions",
+                    return_value=[question_item],
+                ),
+                patch("backend.app.services.expression._topic_matches", return_value=False),
+                patch(
+                    "backend.app.services.expression._search_chunks_for_topic",
+                    return_value=[{"title": "RAG 讲义"}],
+                ),
+                patch(
+                    "backend.app.services.expression._get_or_start_generation",
+                    return_value=Queue(),
+                ),
+            ):
+                started = time.time()
+                result = expression_service.drill_question(
+                    "ai_app_dev",
+                    "固定大小分块",
+                    ["doc_rag"],
+                    "wrong_review",
+                )
+            self.assertLess(time.time() - started, 2)
+            self.assertFalse(result["generated_by_llm"])
+            self.assertEqual("AD1", result["label"])
+            self.assertIn("最接近", result["disclaimer"])
+        finally:
+            expression_service.EXPRESSION_GENERATE_FAST_WAIT_SECONDS = originals["fast_wait"]
 
 
 if __name__ == "__main__":

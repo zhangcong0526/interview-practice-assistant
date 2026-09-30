@@ -490,6 +490,13 @@ export async function getReviewDashboard(): Promise<ReviewDashboard> {
   return apiFetch<ReviewDashboard>('/quiz/review/dashboard')
 }
 
+export async function retryReviewSync(): Promise<{
+  retried: number
+  pending_count: number
+}> {
+  return apiFetch('/quiz/review/sync-retry', { method: 'POST' })
+}
+
 export async function listReviewRecords(): Promise<ReviewRecord[]> {
   const data = await apiFetch<{ records: ReviewRecord[] }>('/quiz/review/mistakes')
   return data.records ?? []
@@ -518,6 +525,7 @@ export async function getExpressionQuestion(
   roleKey: string,
   topicHint = '',
   sourceDocIds: string[] = [],
+  sourceTag = '',
 ): Promise<ExpressionQuestion> {
   return apiFetch<ExpressionQuestion>('/expression/question', {
     method: 'POST',
@@ -526,6 +534,7 @@ export async function getExpressionQuestion(
       role_key: roleKey,
       topic: topicHint,
       source_doc_ids: sourceDocIds,
+      source: sourceTag,
     }),
   })
 }

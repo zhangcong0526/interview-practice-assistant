@@ -100,6 +100,9 @@ class QuizGenerateRequest(BaseModel):
     judge: int = Field(default=4, ge=0, le=30)
     difficulty: str = "mixed"
     focus_weak: bool = True
+    mode: str = Field(default="normal", pattern="^(normal|weak_board)$")
+    direction_id: str = Field(default="", max_length=120)
+    knowledge_point_ids: list[str] = Field(default_factory=list)
 
 
 class MistakeQuizRequest(BaseModel):
@@ -116,6 +119,7 @@ class ExpressionQuestionRequest(BaseModel):
     role_key: str = "robot_hardware"
     topic: str = Field(default="", max_length=200)
     source_doc_ids: list[str] = Field(default_factory=list)
+    source: str = Field(default="", max_length=20)
 
 
 class ExpressionAnalyzeRequest(BaseModel):

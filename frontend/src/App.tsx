@@ -138,6 +138,7 @@ export default function App() {
     roleKey?: string
     token: number
     sourceDocIds?: string[]
+    sourceTag?: string
   } | null>(null)
 
   useEffect(() => {
@@ -195,12 +196,18 @@ export default function App() {
   }, [])
 
   const openExpressionTopic = useCallback(
-    (topic: string, module?: string, sourceDocIds?: string[]) => {
+    (
+      topic: string,
+      module?: string,
+      sourceDocIds?: string[],
+      sourceTag = 'quiz_dashboard',
+    ) => {
       setExpressionSeed({
         topic,
         roleKey: inferExpressionRole(topic, module),
         token: Date.now(),
         sourceDocIds: sourceDocIds ?? [],
+        sourceTag,
       })
       setView('expression')
       window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -486,6 +493,7 @@ export default function App() {
         {view === 'review' && (
           <WrongReviewPage
             onPaperReady={handlePaperReady}
+            onOpenExpression={openExpressionTopic}
             onBackToQuiz={() => {
               setView('quiz')
             }}
@@ -500,6 +508,7 @@ export default function App() {
               seedRoleKey={expressionSeed?.roleKey}
               seedToken={expressionSeed?.token ?? 0}
               seedSourceDocIds={expressionSeed?.sourceDocIds ?? []}
+              seedSourceTag={expressionSeed?.sourceTag ?? ''}
             />
           </div>
         )}

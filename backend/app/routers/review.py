@@ -24,6 +24,11 @@ async def knowledge_map():
     return review_service.get_knowledge_map()
 
 
+@router.post("/sync-retry")
+async def sync_retry():
+    return await asyncio.to_thread(review_service.retry_pending_syncs)
+
+
 @router.post("/tasks/{topic_id}/practice")
 async def practice(topic_id: str):
     try:

@@ -18,6 +18,7 @@ import uuid
 from collections import Counter
 from datetime import date, datetime
 from pathlib import Path
+from queue import Queue
 
 from ..config import settings
 from .. import prompts
@@ -39,9 +40,12 @@ SPEAKING_MATERIAL_CACHE_VERSION = "speaking-materials-v1"
 GENERATED_QUESTION_CACHE_DIR = settings.data_dir / "expression" / "generated_questions"
 GENERATED_QUESTION_CACHE_VERSION = "generated-questions-v1"
 GENERATED_QUESTION_TTL_SECONDS = 7 * 24 * 3600
+EXPRESSION_GENERATE_FAST_WAIT_SECONDS = 6.0
 _SPEAKING_JOBS_LOCK = threading.Lock()
 _SPEAKING_JOBS: set[str] = set()
 _SPEAKING_WORK_LIMIT = threading.Semaphore(2)
+_GENERATION_JOBS_LOCK = threading.Lock()
+_PENDING_GENERATIONS: dict[str, Queue] = {}
 
 # 纯粹的语气词，出现即扣分。
 FILLER_WORDS = ("嗯", "呃", "唉", "哦", "啊", "额")
@@ -72,6 +76,7 @@ def ensure_dirs() -> None:
     SESSION_DIR.mkdir(parents=True, exist_ok=True)
     KEYWORD_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     SPEAKING_MATERIAL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    GENERATED_QUESTION_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _write_json(path: Path, data: dict) -> None:
@@ -471,7 +476,47 @@ def _save_generated_question(cache_key: str, payload: dict) -> None:
         pass
 
 
-EXPRESSION_GENERATE_TIMEOUT_SECONDS = 35.0
+EXPRESSION_GENERATE_TIMEOUT_SECONDS = 45.0
+
+
+def _wait_for_generated_question(queue: Queue, timeout: float) -> dict | None:
+    try:
+        result = queue.get(timeout=timeout)
+    except Exception:
+        return None
+    return result if isinstance(result, dict) else None
+
+
+def _get_or_start_generation(
+    cache_key: str,
+    role_name: str,
+    topic_hint: str,
+    chunks: list[dict],
+) -> Queue:
+    with _GENERATION_JOBS_LOCK:
+        pending = _PENDING_GENERATIONS.get(cache_key)
+        if pending:
+            return pending
+        queue: Queue = Queue(maxsize=1)
+        _PENDING_GENERATIONS[cache_key] = queue
+
+    def worker() -> None:
+        result = _generate_question_via_llm(role_name, topic_hint, chunks)
+        if result:
+            _save_generated_question(cache_key, result)
+        try:
+            queue.put_nowait(result)
+        except Exception:
+            pass
+        with _GENERATION_JOBS_LOCK:
+            _PENDING_GENERATIONS.pop(cache_key, None)
+
+    threading.Thread(
+        target=worker,
+        name=f"expression-question-{cache_key[:8]}",
+        daemon=True,
+    ).start()
+    return queue
 
 
 def _generate_question_via_llm(
@@ -519,6 +564,7 @@ def drill_question(
     role_key: str,
     topic_hint: str = "",
     source_doc_ids: list[str] | None = None,
+    source: str = "",
 ) -> dict:
     """从该岗位的真题库里出一道表达练习题，避开最近练过的题。"""
     role = roles_service.get_role(role_key)
@@ -564,21 +610,28 @@ def drill_question(
         cached = _load_generated_question(cache_key)
         if cached:
             generated_payload = cached
-        else:
+        if not cached:
             chunks = _search_chunks_for_topic(topic_hint, source_doc_ids)
             if chunks:
-                generated_payload = _generate_question_via_llm(
-                    role.name, topic_hint, chunks
+                generated_queue = _get_or_start_generation(
+                    cache_key,
+                    role.name,
+                    topic_hint,
+                    chunks,
+                )
+                generated_payload = _wait_for_generated_question(
+                    generated_queue,
+                    EXPRESSION_GENERATE_FAST_WAIT_SECONDS,
                 )
                 if generated_payload:
                     _save_generated_question(cache_key, generated_payload)
-                    _prefetch_speaking_materials(
-                        generated_payload["question"],
-                        generated_payload["reference_answer"],
-                        generated_payload.get("keywords") or [],
-                    )
         if generated_payload:
             generated_by_llm = True
+            _prefetch_speaking_materials(
+                generated_payload["question"],
+                generated_payload["reference_answer"],
+                generated_payload.get("keywords") or [],
+            )
 
     if generated_by_llm and generated_payload:
         keywords, standard_key_points, reference_script = _speaking_materials(
@@ -602,11 +655,15 @@ def drill_question(
             "keywords": keywords or generated_payload.get("keywords") or [],
             "standard_key_points": standard_key_points,
             "reference_script": reference_script,
+            "source_tag": source,
             "role_key": role.key,
             "role_name": role.name,
         }
 
-    item = random.choice(pool)
+    if topic_hint and not topic_matched:
+        item = max(pool, key=lambda candidate: _topic_match_score(candidate, topic_terms))
+    else:
+        item = random.choice(pool)
     question = _drill_display_question(item)
     display_question = question or item["question"]
     keywords, standard_key_points, reference_script = _speaking_materials(
@@ -618,7 +675,7 @@ def drill_question(
     fallback_disclaimer = None
     if topic_hint and not topic_matched:
         fallback_disclaimer = (
-            "本题来自现有真题库随机抽取，未必对应你的薄弱知识点，仅作临时练习。"
+            "已选最接近该知识点的现有真题；AI 定制题仍在后台生成，换一题时可能命中。"
         )
     return {
         "question": display_question,
@@ -632,6 +689,7 @@ def drill_question(
         "keywords": keywords,
         "standard_key_points": standard_key_points,
         "reference_script": reference_script,
+        "source_tag": source,
         "role_key": role.key,
         "role_name": role.name,
     }

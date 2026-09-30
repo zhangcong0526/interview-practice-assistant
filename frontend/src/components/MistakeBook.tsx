@@ -65,11 +65,16 @@ export function MistakeBook({
     try {
       const paper = await generateQuizPaper({
         keywords,
-        single: 4,
-        multiple: 3,
-        judge: 3,
+        single: label.startsWith('topic:') ? 2 : 4,
+        multiple: label.startsWith('topic:') ? 1 : 3,
+        judge: label.startsWith('topic:') ? 2 : 3,
         difficulty: 'mixed',
         focus_weak: true,
+        mode: 'weak_board',
+        direction_id: label.startsWith('module:') ? label.slice('module:'.length) : '',
+        knowledge_point_ids: label.startsWith('topic:')
+          ? keywords
+          : [],
       })
       onPaperReady(paper)
     } catch (error) {
@@ -211,7 +216,7 @@ export function MistakeBook({
                   ) : (
                     <RotateCcw className="size-3" aria-hidden="true" />
                   )}
-                  再练 5 题
+                  巩固 5 题
                 </button>
               </li>
             ))}

@@ -36,6 +36,9 @@ async def generate_paper(req: QuizGenerateRequest):
             req.judge,
             req.difficulty,
             req.focus_weak,
+            req.mode,
+            req.direction_id,
+            req.knowledge_point_ids,
         )
     except quiz_service.QuizError as exc:
         raise HTTPException(422, str(exc))

@@ -9,6 +9,8 @@ import {
   GraduationCap,
   Layers,
   Loader2,
+  Mic,
+  RefreshCw,
   RotateCcw,
   Search,
   TrendingUp,
@@ -19,6 +21,7 @@ import {
   getQuizProgress,
   getReviewDashboard,
   listReviewRecords,
+  retryReviewSync,
   saveReviewErrorCause,
 } from '../api'
 import type {
@@ -32,6 +35,12 @@ import type {
 interface WrongReviewPageProps {
   onPaperReady: (paper: QuizPaper) => void
   onBackToQuiz: () => void
+  onOpenExpression: (
+    topic: string,
+    module?: string,
+    sourceDocIds?: string[],
+    sourceTag?: string,
+  ) => void
 }
 
 type ReviewTab = 'today' | 'knowledge' | 'all'
@@ -76,6 +85,7 @@ function accuracyColor(accuracy: number): string {
 export function WrongReviewPage({
   onPaperReady,
   onBackToQuiz,
+  onOpenExpression,
 }: WrongReviewPageProps) {
   const [tab, setTab] = useState<ReviewTab>('today')
   const [dashboard, setDashboard] = useState<ReviewDashboard | null>(null)
@@ -89,6 +99,8 @@ export function WrongReviewPage({
   const [statusFilter, setStatusFilter] = useState<RecordStatusFilter>('all')
   const [keyword, setKeyword] = useState('')
   const [selectedModule, setSelectedModule] = useState('')
+  const [syncBusy, setSyncBusy] = useState(false)
+  const [syncMessage, setSyncMessage] = useState('')
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -165,6 +177,33 @@ export function WrongReviewPage({
     }
   }
 
+  const recordDocIds = (record: ReviewRecord): string[] => {
+    const lineage = record.source_lineage ?? {}
+    return Array.from(
+      new Set(
+        [
+          lineage.source_doc_id,
+          ...(lineage.paper_doc_ids ?? []),
+          ...(lineage.source_docs ?? []).map((doc) => doc.doc_id),
+        ].filter((id): id is string => Boolean(id)),
+      ),
+    )
+  }
+
+  const handleRetrySync = async () => {
+    setSyncBusy(true)
+    setSyncMessage('')
+    try {
+      const result = await retryReviewSync()
+      setSyncMessage(`已重试 ${result.retried} 项，剩余 ${result.pending_count} 项。`)
+      await loadData()
+    } catch (retryError) {
+      setSyncMessage(retryError instanceof Error ? retryError.message : '重试失败。')
+    } finally {
+      setSyncBusy(false)
+    }
+  }
+
   const filteredRecords = useMemo(() => {
     const text = keyword.trim().toLowerCase()
     return records.filter((item) => {
@@ -201,12 +240,36 @@ export function WrongReviewPage({
                 已毕业 {dashboard.graduated_count}
               </span>
             )}
+            {dashboard && (
+              <span className="rounded-lg bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700">
+                连续完成 {dashboard.current_streak ?? 0} 天
+              </span>
+            )}
+            {(dashboard?.sync_pending_count ?? 0) > 0 && (
+              <button
+                type="button"
+                className="secondary-btn px-3 py-2 text-xs"
+                onClick={() => void handleRetrySync()}
+                disabled={syncBusy}
+              >
+                {syncBusy ? (
+                  <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+                ) : (
+                  <RefreshCw className="size-3.5" aria-hidden="true" />
+                )}
+                重试同步（{dashboard?.sync_pending_count}）
+              </button>
+            )}
             <button type="button" className="secondary-btn px-3 py-2 text-xs" onClick={onBackToQuiz}>
               <ArrowLeft className="size-3.5" aria-hidden="true" />
               回到在线刷题
             </button>
           </div>
         </div>
+
+        {syncMessage && (
+          <p className="mt-3 text-xs leading-5 text-zinc-600">{syncMessage}</p>
+        )}
 
         <div className="mt-4 flex flex-wrap gap-2">
           {REVIEW_TABS.map((item) => {
@@ -341,6 +404,21 @@ export function WrongReviewPage({
                               {cause}
                             </button>
                           ))}
+                          <button
+                            type="button"
+                            className="ml-auto inline-flex items-center gap-1 rounded-md bg-sky-600 px-2 py-1.5 text-xs font-semibold text-white transition hover:bg-sky-700"
+                            onClick={() =>
+                              onOpenExpression(
+                                record.topic,
+                                undefined,
+                                recordDocIds(record),
+                                'wrong_review',
+                              )
+                            }
+                          >
+                            <Mic className="size-3" aria-hidden="true" />
+                            去说一说
+                          </button>
                         </div>
                       </li>
                     ))}
@@ -507,6 +585,21 @@ export function WrongReviewPage({
                   {record.source_title && (
                     <p className="mt-1.5 truncate text-xs text-zinc-500">来源：{record.source_title}</p>
                   )}
+                  <button
+                    type="button"
+                    className="mt-2 inline-flex items-center gap-1 rounded-md bg-sky-600 px-2 py-1 text-xs font-semibold text-white transition hover:bg-sky-700"
+                    onClick={() =>
+                      onOpenExpression(
+                        record.topic,
+                        undefined,
+                        recordDocIds(record),
+                        'wrong_review',
+                      )
+                    }
+                  >
+                    <Mic className="size-3" aria-hidden="true" />
+                    去说一说
+                  </button>
                 </li>
               ))}
             </ul>

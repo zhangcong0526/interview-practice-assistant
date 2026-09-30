@@ -1222,8 +1222,16 @@ def generate_paper(
     judge: int = 2,
     difficulty: str = "mixed",
     focus_weak: bool = True,
+    mode: str = "normal",
+    direction_id: str = "",
+    knowledge_point_ids: list[str] | None = None,
 ) -> dict:
     keywords = [k.strip() for k in keywords if k.strip()]
+    direction_id = direction_id.strip()
+    knowledge_point_ids = [item.strip() for item in (knowledge_point_ids or []) if item.strip()]
+    if mode == "weak_board":
+        keywords = list(dict.fromkeys(keywords + knowledge_point_ids))
+        focus_weak = True
     counts = {"single": max(0, single), "multiple": max(0, multiple), "judge": max(0, judge)}
     total = sum(counts.values())
     if total <= 0:
@@ -1236,6 +1244,25 @@ def generate_paper(
         raise QuizError("没有检索到相关资料，请更换关键词或先导入知识库文档。")
 
     topic_catalog = _topic_catalog()
+
+    def belongs_to_weak_board(item: dict) -> bool:
+        if mode != "weak_board":
+            return True
+        topic = str(item.get("topic") or "")
+        module = _topic_module(topic, topic_catalog)
+        direction_matches = (
+            not direction_id
+            or _normalise_topic_key(module) == _normalise_topic_key(direction_id)
+            or _normalise_topic_key(topic) == _normalise_topic_key(direction_id)
+        )
+        if not direction_matches:
+            return False
+        if knowledge_point_ids:
+            return topic in knowledge_point_ids or _normalise_topic_key(topic) in {
+                _normalise_topic_key(item) for item in knowledge_point_ids
+            }
+        return True
+
     keywords = [_canonical_topic(keyword, topic_catalog) for keyword in keywords]
     weak_topics = [item["topic"] for item in list_weak_topics(limit=8)] if focus_weak else []
     coverage_hint = _topic_type_coverage_hint(keywords)
@@ -1272,6 +1299,8 @@ def generate_paper(
             coverage_hint,
         )
         initial_candidates = normalise_raw(raw)
+        if mode == "weak_board":
+            initial_candidates = [item for item in initial_candidates if belongs_to_weak_board(item)]
         unique_questions = _dedupe_questions(initial_candidates, recent_stems)
     except llm_service.LlmError as exc:
         raise QuizError(f"组卷失败：{exc}") from exc
@@ -1308,6 +1337,8 @@ def generate_paper(
                 coverage_hint,
             )
             retry_candidates = normalise_raw(retry_raw)
+            if mode == "weak_board":
+                retry_candidates = [item for item in retry_candidates if belongs_to_weak_board(item)]
             unique_questions = _dedupe_questions(
                 retry_candidates,
                 retry_avoid,
@@ -1373,6 +1404,8 @@ def generate_paper(
                 coverage_hint,
             )
             retry2_candidates = normalise_raw(retry2_raw)
+            if mode == "weak_board":
+                retry2_candidates = [item for item in retry2_candidates if belongs_to_weak_board(item)]
             unique_questions = _dedupe_questions(
                 retry2_candidates,
                 retry2_avoid,
@@ -1402,7 +1435,7 @@ def generate_paper(
                 topic_catalog,
                 strict=False,
             )
-            if question:
+            if question and belongs_to_weak_board(question):
                 relaxed_candidates.append(question)
         quiz_logger.info(
             "paper relaxed pool raw=%d recovered=%d deficits=%s",
@@ -1480,7 +1513,10 @@ def generate_paper(
     paper_id = uuid.uuid4().hex
     title = raw_title
     if not title:
-        title = ("、".join(keywords[:3]) or "综合练习") + " 测验"
+        if mode == "weak_board" and direction_id:
+            title = f"{direction_id}板块巩固"
+        else:
+            title = ("、".join(keywords[:3]) or "综合练习") + " 测验"
 
     paper = {
         "paper_id": paper_id,
@@ -1492,6 +1528,11 @@ def generate_paper(
         "source_chunks": actual_chunks,
         "difficulty": difficulty,
         "questions": questions,
+        "generation_context": {
+            "kind": "weak_board" if mode == "weak_board" else "normal_quiz",
+            "direction_id": direction_id,
+            "knowledge_point_ids": knowledge_point_ids,
+        },
         "created_at": int(time.time()),
     }
     _write_json(PAPERS_DIR / f"{paper_id}.json", paper)
@@ -2926,6 +2967,8 @@ def grade(paper_id: str, answers: dict[str, list[str]]) -> dict:
                 "is_correct": is_correct,
                 "explanation": question.get("explanation", ""),
                 "source_title": question.get("source_title", ""),
+                "source_doc_id": question.get("source_doc_id", ""),
+                "source_docs": question.get("source_docs", []),
                 "source_chunk_ids": question.get("source_chunk_ids", []),
                 "user_answer_text": _answer_text(question, picked),
                 "correct_answer_text": _answer_text(question, expected),
@@ -2938,7 +2981,12 @@ def grade(paper_id: str, answers: dict[str, list[str]]) -> dict:
 
     topic_stats = _update_mastery(graded)
     _update_mistakes(graded, paper)
-    review_service.sync_grade(graded, paper)
+    sync_error = None
+    try:
+        review_service.sync_grade(graded, paper)
+    except Exception as exc:
+        sync_error = exc
+        review_service.enqueue_failed_sync(graded, paper, exc)
     review_sources = _collect_review_sources(graded, topic_stats, paper)
 
     history = [
@@ -2972,6 +3020,7 @@ def grade(paper_id: str, answers: dict[str, list[str]]) -> dict:
         "total": total,
         "questions": graded,
         "review": review,
+        "review_sync_error": repr(sync_error) if sync_error else "",
         "created_at": int(time.time()),
     }
     _write_json(ATTEMPTS_DIR / f"{attempt_id}.json", attempt)

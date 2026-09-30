@@ -22,6 +22,7 @@ async def next_question(req: ExpressionQuestionRequest):
             req.role_key,
             req.topic,
             req.source_doc_ids,
+            req.source,
         )
     except expression_service.ExpressionError as exc:
         raise HTTPException(422, str(exc))
